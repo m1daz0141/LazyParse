@@ -18,3 +18,12 @@ py -3 -m unittest tools.combat_core.test_combat_core tools.combat_core.test_live
 ```
 
 配布していない実機fixtureとビルド前のnativeテストホストはskipします。合成パケットによる分類・区切り・保存処理の試験は実行できます。公開ソース内のfixture名・人物名・人物IDは匿名のplaceholderです。
+
+
+## 独立したJA除外設定
+
+旧OverParseの除外CSVを読みません。標準ルールは`data/ja_exclusions.csv`で、独自に定義したタクト通常攻撃1 IDのみです。ペットは発生元の種別でJA対象外にします。標準セットを旧129 IDと同じ検証範囲とは扱いません。その他の攻撃は既存のbit候補判定を維持し、全攻撃の適用範囲は未検証です。
+
+ユーザー設定が必要な場合は`ja_exclusions.local.csv`を作成します。形式は`attack_id,reason`のCSV（UTF-8）、または1行に1つの10進IDです。ローカル設定があれば標準を置き換え、そのパス・ハッシュ・件数をレポートに残します。内容不正ではJAを未判定にし、Critやダメージ値は維持します。このローカル設定はGit管理外です。
+
+旧API名`read_legacy_ignore`は互換用の別名として残りますが、旧アプリのファイルを開く処理はありません。ネイティブDLLのOverParse名は内部ABIの互換名で、旧WPFソースへの依存ではありません。

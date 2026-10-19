@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 
 from .__main__ import replay
-from .hit_flags import LEGACY_SOURCE, inspect_event, read_legacy_ignore
+from .hit_flags import LEGACY_SOURCE, inspect_event, read_ja_exclusions
 
 CSV_FIELDS = ['capture_path', 'sequence', 'filetime', 'qpc', 'source_id', 'source_kind', 'source_name',
     'credited_source_id', 'credited_role', 'target_id', 'target_kind', 'attack_id', 'attack_name',
@@ -75,14 +75,14 @@ def main():
         outputs = [path.resolve() for path in (args.output, args.csv) if path]
         if len(outputs) != len(set(outputs)) or any(path.exists() for path in outputs):
             raise ValueError('Output paths must be distinct new files')
-        ignored_ids, policy = read_legacy_ignore()
+        ignored_ids, policy = read_ja_exclusions()
         captures, all_rows = [], []
         for path in args.captures:
             capture, rows = audit_capture(path, ignored_ids)
             captures.append(capture)
             all_rows.extend(rows)
         result = {'schema_version': 1, 'purpose': 'offline_legacy_flag_candidates_only',
-            'legacy_definition': LEGACY_SOURCE, 'legacy_ja_ignore': policy,
+            'legacy_definition': LEGACY_SOURCE, 'ja_exclusions': policy,
             'policy': {'pet_ja': 'not_applicable_before_owner_credit',
                 'takt_normal_ja': 'excluded_as_pet_related', 'attack_id_zero_ja': 'unknown',
                 'non_positive_values': 'excluded_from_ja_and_crit_candidates',

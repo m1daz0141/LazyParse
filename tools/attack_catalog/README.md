@@ -8,7 +8,7 @@ GUIの「解析→攻撃名CSVを開く」で開き、保存後「攻撃名CSV�
 
 名前辞書は人物の帰属・ダメージ/回復分類・JA/Crit判定には使用しません。未登録IDはそのまま残し、GUIでは不明と表示します。上流データの全IDを現行クライアントで検証済みとは扱いません。
 
-上流: [Remon-7L/Remon-7L.github.io](https://github.com/Remon-7L/Remon-7L.github.io)、固定commitはsource.jsonを参照。上流データへこのリポジトリのMITライセンスを付け替えていません。
+上流: [Remon-7L/Remon-7L.github.io](https://github.com/Remon-7L/Remon-7L.github.io)、固定commitはsource.jsonを参照。上流データへMITまたはこのリポジトリのWTFPLライセンスを付け替えていません。
 
 ```powershell
 py -3 -m unittest tools.attack_catalog.test_catalog -v

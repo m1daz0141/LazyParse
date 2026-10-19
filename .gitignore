@@ -27,3 +27,11 @@ HANDOFF.md
 *.pem
 *.pfx
 *.key
+
+# Legacy application and local JA overrides are not distributed.
+/OverParse/
+/OverParse.sln
+/FodyWeavers.xml
+/docs/OVERPARSE-README.md
+/tools/OverParseCsv/
+/tools/combat_core/ja_exclusions.local.csv

@@ -123,7 +123,7 @@ def rate_tooltip(row, metric):
     lines = [f"{title}: {percentage(row[metric])}",
              f"成立 {counts[metric + '_hits']} / 対象 {counts[metric + '_eligible_hits']} ヒット"]
     if metric == 'ja':
-        lines.append(f"対象外 {counts['ja_excluded_hits']}（ペット・タクト通常・旧除外IDなど）")
+        lines.append(f"対象外 {counts['ja_excluded_hits']}（ペット・タクト通常・設定した除外ID）")
     lines.append(f"未判定 {counts[metric + '_unknown_hits']}")
     lines.append('対象0件は—。古い集計JSONに判定情報がない場合は元OPCAPを開いて再集計できます。')
     return '\n'.join(lines)

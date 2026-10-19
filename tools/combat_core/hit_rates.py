@@ -59,12 +59,12 @@ def classify_hit(event, ignored_ids):
 
 
 def rate_policy(ignore_metadata):
-    return {'version': 1, 'interpretation': 'classic_legacy_masks_with_limited_live_checks',
+    return {'version': 2, 'interpretation': 'classic_masks_with_independent_ja_rules',
             'offset': OFFSET, 'ja_mask': JA_MASK, 'crit_mask': CRIT_MASK,
             'denominator': 'eligible_positive_hits', 'merge': 'sum_counts_then_divide',
             'ja_scope': 'original_source_before_owner_credit',
             'pet_ja': 'not_applicable', 'crit_owner_credit': 'includes_pet_hits',
-            'zero_denominator_percent': None, 'legacy_ja_ignore': dict(ignore_metadata),
+            'zero_denominator_percent': None, 'ja_exclusions': dict(ignore_metadata),
             'validation': {
                 'all_classes_and_attacks_verified': False,
                 'ja_controlled_attack_ids': [2441204394, 3756260250, 3756260700],

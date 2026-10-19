@@ -58,7 +58,7 @@ class RateTests(unittest.TestCase):
         self.assertIsNone(counts['ja_percent'])
         self.assertEqual(counts['ja_unknown_hits'], 1)
         self.assertEqual(counts['crit_percent'], 0)
-        self.assertEqual(audit['hit_flags']['ja_scope_reason'], 'legacy_ignore_policy_unavailable')
+        self.assertEqual(audit['hit_flags']['ja_scope_reason'], 'ja_exclusion_policy_unavailable')
         self.assertIsNone(HitRates().as_dict()['crit_percent'])
 
     def test_duplicates_snapshots_segments_and_reset_do_not_inflate_rates(self):

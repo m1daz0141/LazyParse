@@ -5,7 +5,7 @@ from fractions import Fraction
 import math
 
 from .model import IdentityRegistry
-from .hit_flags import read_legacy_ignore
+from .hit_flags import read_ja_exclusions
 from .hit_rates import HitRates, classify_hit, rate_policy
 from ..attack_catalog.catalog import get_catalog, with_attack_names
 
@@ -81,7 +81,7 @@ class CombatEngine:
         self.measurement_now = None
         self.measurement_frequency = None
         self.measurement_finished = False
-        self.ja_ignored_ids, self.ja_ignore_metadata = read_legacy_ignore()
+        self.ja_ignored_ids, self.ja_ignore_metadata = read_ja_exclusions()
 
     def begin_segment(self, capture_id, registry=None, quality_flags=(), *, first_sequence=1):
         if not capture_id or capture_id == self.capture_id:

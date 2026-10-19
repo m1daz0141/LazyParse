@@ -521,7 +521,7 @@ class Application:
         for key, _, x, end in self._layout():
             if x <= event.x < end:
                 if key in {'ja', 'crit'}:
-                    message = ('JA成立ヒット数 / JA対象ヒット数。ペット・タクト通常・旧除外IDは対象外。' if key == 'ja' else
+                    message = ('JA成立ヒット数 / JA対象ヒット数。ペット・タクト通常・設定した除外IDは対象外。' if key == 'ja' else
                                'Crit成立ヒット数 / 正値ヒット数。所有者へ帰属したペット攻撃も含みます。')
                     message += '\n対象0件や判定情報がない場合は—。行にカーソルを合わせると件数を表示します。'
                 elif key == 'dps':

@@ -44,8 +44,10 @@ GUI起動だけではDLLの配置やゲーム起動を行いません。[取得�
 
 特定版のJP Classicとソロの森林探索で確認しています。クエスト種別全般、失敗・リトライ、パーティーの挙動は検証中です。JAには対象外・未判定の区別があり、ペットはJAの対象外です。実機データを使う一部の回帰試験は、非公開のfixtureがない環境ではskipします。
 
-## 出典・ライセンス
+## ライセンス
 
-旧OverParseのソースを`OverParse/`へ残しています。元プロジェクト: [mysterious64/OverParse](https://github.com/mysterious64/OverParse)。TyroneSama、Remon-7L、Variant、SkrubZer0を含む元実装のクレジットは[元README](docs/OVERPARSE-README.md)を参照してください。旧WPFアプリの機能・外部取得処理は新しいGUIとは独立しています。
+LazyParse独自コード・文書は **WTFPL version 2**。Copyright (C) 2026 m1daz0141。[License](License)、[COPYRIGHT](COPYRIGHT)を参照してください。
 
-プロジェクトの[MIT License](License)と元の著作権表示を保持しています。攻撃名データの出典・固定commit・ライセンス確認状況は`tools/attack_catalog/data/source.json`に記録し、上流データへ本プロジェクトのMITを付け替えていません。MinHookのライセンスは取得先とビルド出力へ保持します。ゲーム本体・依存バイナリ・実機データは同梱しません。
+第三者由来のデータやビルド依存物は元の条件を保持します。[Third-party notices](THIRD_PARTY_NOTICES.md)に適用範囲を分けて記載しています。指定のRemon攻撃名CSVは保持していますが、上流のライセンス表示は未確認であり、MITやWTFPLをこちらから付与していません。
+
+旧OverParseのWPFソース・画像・プロジェクト・除外CSVは同梱しません。新GUIは独立実装です。JA除外はLazyParseの独立した設定ファイルで扱い、旧フォルダーがなくても起動・集計できます。UIの参考元: [mysterious64/OverParse](https://github.com/mysterious64/OverParse)。

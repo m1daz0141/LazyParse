@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from .audit_hit_flags import audit_capture, summarize
-from .hit_flags import JA_MASK, CRIT_MASK, inspect_event, legacy_flags, read_legacy_ignore
+from .hit_flags import JA_MASK, CRIT_MASK, inspect_event, legacy_flags, read_legacy_ignore, read_ja_exclusions, RULES_PATH
 
 ROOT = Path(__file__).resolve().parents[2]
 MARON = ROOT / 'tools/native_capture/captures/classic-auto-fixture-001/run-100000000000000001-1-0/segment-000001/capture.opcap'
@@ -51,7 +51,7 @@ class CandidateTests(unittest.TestCase):
 
     def test_takt_and_legacy_ignore_do_not_count_as_failed_ja(self):
         for attack, ignored, reason in [(4065469038, frozenset(), 'takt_normal_pet_related_no_ja_policy'),
-                                        (99, frozenset({99}), 'legacy_ignore_id')]:
+                                        (99, frozenset({99}), 'configured_no_ja_id')]:
             row = inspect_event(event(attack=attack), ignored)
             self.assertFalse(row['ja_eligible_candidate'])
             self.assertIsNone(row['ja_candidate'])
@@ -76,13 +76,23 @@ class CandidateTests(unittest.TestCase):
             inspect_event(wrong, frozenset())
 
     def test_ignore_policy_provenance_and_unavailable_are_explicit(self):
-        ignored, policy = read_legacy_ignore()
-        self.assertEqual((len(ignored), policy['rows']), (129, 130))
+        ignored, policy = read_ja_exclusions(RULES_PATH)
+        self.assertEqual(ignored, frozenset({4065469038}))
+        self.assertEqual(policy['rows'], 1)
         self.assertTrue(policy['available'])
+        self.assertFalse(policy['requires_overparse_files'])
         with tempfile.TemporaryDirectory() as work:
-            ignored, policy = read_legacy_ignore(Path(work) / 'missing.csv')
+            ignored, policy = read_ja_exclusions(Path(work) / 'missing.csv')
             self.assertIsNone(ignored)
             self.assertFalse(policy['available'])
+            configured = Path(work) / 'configured.csv'
+            configured.write_text('attack_id,reason\n99,independent_test\n100,another_rule\n', encoding='utf-8')
+            ignored, policy = read_ja_exclusions(configured)
+            self.assertEqual(ignored, frozenset({99, 100}))
+            configured.write_text('4294967296,bad\n', encoding='utf-8')
+            ignored, policy = read_ja_exclusions(configured)
+            self.assertIsNone(ignored)
+            self.assertIn('uint32', policy['error'])
 
 
 @unittest.skipUnless(MARON.exists() and FIRST.exists(), 'private Classic recordings required')

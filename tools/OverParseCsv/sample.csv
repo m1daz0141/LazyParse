@@ -1,0 +1,6 @@
+timestamp,instanceID,sourceID,sourceName,targetID,targetName,attackID,damage,IsJA,IsCrit,IsMultiHit,IsMisc,IsMisc2
+1720000000,0,10000001,YOU,0,0,0,0,0,0,0,0,0
+1,1,10000001,Alice,1,Rappy,500,100,1,0
+2,1,10000002,Bob,1,Rappy,700,200,0,1
+3,1,123,Rappy,10000001,Alice,900,50,0,0
+4,1,10000001,Alice,1,Rappy,500,50,1,1

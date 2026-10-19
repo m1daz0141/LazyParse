@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/Remon-7L/Remon-7L.github.io",
+  "commit": "0c5d1010d8b72fb5bbdec20775d4826ec1ea68c6",
+  "commit_date": "2020-09-17T17:41:09+09:00",
+  "path": "skills_ja.csv",
+  "url": "https://raw.githubusercontent.com/Remon-7L/Remon-7L.github.io/0c5d1010d8b72fb5bbdec20775d4826ec1ea68c6/skills_ja.csv",
+  "sha256": "800a6742b08b4f34873ad1de8a5aac86db1cb0fb6335b31bac9b4548b1a191a9",
+  "version": "OvP2020091700",
+  "language": "ja",
+  "entries": 1900,
+  "license": null,
+  "license_note": "No license file or data-specific license notice was found at this commit. The project's MIT license is not asserted for this upstream data."
+}

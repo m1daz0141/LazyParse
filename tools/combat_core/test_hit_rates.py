@@ -158,9 +158,9 @@ class GuiLiveRecordingTests(unittest.TestCase):
     def test_gui_boundary_and_map_return_preserve_totals_and_rates(self):
         expected = [
             (1, 265, 263, 19674602, 253, 259, 4, 260,
-             '0000000000000000000000000000000000000000000000000000000000000000'),
+             '3ccd66696ab14ff9b2bd55121daeb3c414f24ba8e3c7751df99415e52f7e4ffe'),
             (2, 12, 8, 752445, 8, 8, 0, 8,
-             '0000000000000000000000000000000000000000000000000000000000000000')]
+             '0136b2897849f1303c908aae4a853f16611b42cb7f13ab386caefddfbb69cd8c')]
         for number, records, hits, damage, ja, eligible, excluded, crit, digest in expected:
             with self.subTest(segment=number):
                 path = GUI_LIVE / f'segment-{number:06d}/capture.opcap'

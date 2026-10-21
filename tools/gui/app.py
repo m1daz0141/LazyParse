@@ -4,12 +4,17 @@ import os
 from pathlib import Path
 import queue
 import tkinter as tk
-from tkinter import filedialog, font, ttk
+from tkinter import filedialog, font, ttk, messagebox
 
 from .settings import Settings, STATE
 from .viewmodel import COLUMNS, number, percentage, actor_rows, attack_rows, source_rows, clipboard_summary, status_view, rate_tooltip, display_elapsed, elapsed_label
 from .timing import with_dps_mode, DPS_MODES
 from ..attack_catalog.catalog import attack_label, get_catalog, with_attack_names, EDITABLE_CSV
+from ..combat_core.quest_catalog import QUESTS_CSV, get_quest_catalog, quest_label
+from .text_export import EXPORT_DIRECTORY, filename
+from .backend import stored_history, history_key
+from .control import preparation_error
+from ..version import VERSION
 
 BG = '#0a0a0a'
 PANEL = '#15191c'
@@ -117,6 +122,7 @@ class Application:
         self.settings = Settings.load(self.settings_path)
         self.backend.interval = self.settings.interval
         self.backend.auto_quests = self.settings.auto_quests
+        self._sync_text_options()
         self.latest = {}
         self.saved = None
         self.snapshot = {}
@@ -126,13 +132,16 @@ class Application:
         self.sort_key, self.descending = 'damage_dealt', True
         self.busy = False
         self.notice = ''
+        self.last_preparation_error = None
         self.notice_timer = None
         self.details = {}
         self.drag = None
         self.closed = False
         self.tooltip = Tooltip(root)
         self.fonts = {}
-        self.root.title('LazyParse')
+        self.root.title('LazyParse ' + VERSION)
+        self.app_icon = tk.PhotoImage(master=self.root, file=Path(__file__).with_name('assets') / 'icon.png')
+        self.root.iconphoto(True, self.app_icon)
         self.root.configure(bg=LINE)
         self.root.geometry(self.settings.geometry)
         self.root.minsize(500, 190)
@@ -149,10 +158,10 @@ class Application:
         self.root.bind('<Control-c>', lambda event: self.copy())
         self.root.bind('<Map>', self._mapped)
         self.root.bind('<Escape>', lambda event: self.tooltip.hide())
-        self.root.after(100, self._ensure_visible)
+        self.visibility_timer = self.root.after(100, self._ensure_visible)
         if start_backend:
             self.backend.start()
-        self.root.after(50, self._consume)
+        self.consume_timer = self.root.after(50, self._consume)
 
     def _style(self):
         style = ttk.Style(self.root)
@@ -221,6 +230,7 @@ class Application:
                                 font=('Meiryo UI', 8))
         self.summary.pack(side='left', fill='x', expand=True)
         self.summary.bind('<Button-1>', lambda event: self.show_diagnostics())
+        self.summary.bind('<Button-3>', self._row_menu)
         self.grip = tk.Label(footer, text='◢', bg=BG, fg=MUTED, cursor='sizing', padx=3)
         self.grip.pack(side='right')
         self.grip.bind('<ButtonPress-1>', self._resize_start)
@@ -243,6 +253,7 @@ class Application:
         logging.add_command(label='記録停止', command=lambda: self.command('Stop'))
         self._check(logging, 'クエストごとに自動計測（試験中）', 'auto_quests')
         self._check(logging, 'Timeを小数点まで表示', 'time_decimals')
+        self._check(logging, '計測終了時にTXTを自動出力', 'auto_text_export')
         logging.add_separator()
         logging.add_command(label='保存して次の計測へ', accelerator='Ctrl+Shift+E', command=lambda: self.command('Next'))
         logging.add_command(label='新しい計測へリセット', accelerator='Ctrl+Shift+R', command=lambda: self.command('Reset'))
@@ -262,6 +273,11 @@ class Application:
         parsing.add_separator()
         parsing.add_command(label='攻撃名CSVを開く', command=self.open_attack_csv)
         parsing.add_command(label='攻撃名CSVを再読込', command=self.reload_attack_names)
+        parsing.add_command(label='クエスト名CSVを開く', command=self.open_quest_csv)
+        parsing.add_command(label='クエスト名CSVを再読込', command=self.reload_quest_names)
+        setup = self._menu('設定')
+        setup.add_command(label='PSO2フォルダーを選択・DLLを配置…', command=self.choose_game_folder)
+        setup.add_command(label='追加したDLLを撤去', command=self.remove_loader)
         display = self._menu('表示')
         self._check(display, '常に手前に表示', 'topmost')
         self._check(display, 'ダメージバー', 'bars')
@@ -290,12 +306,37 @@ class Application:
         logs.add_separator()
         logs.add_command(label='一覧をコピー', accelerator='Ctrl+C', command=self.copy)
         logs.add_command(label='集計をJSONへ保存…', command=self.export)
+        logs.add_command(label='計測結果をTXTへ保存…', command=self.export_text)
+        logs.add_command(label='TXT出力フォルダーを開く', command=self.open_export_folder)
         logs.add_command(label='元データの場所を開く', command=self.open_folder)
 
     def _check(self, menu, label, key):
         variable = tk.BooleanVar(value=getattr(self.settings, key))
         self.variables[key] = variable
         menu.add_checkbutton(label=label, variable=variable, command=lambda: self.toggle(key, variable.get()))
+
+    def ensure_loader(self):
+        if self.settings.game_directory:
+            self.backend.submit('CheckLoader', path=self.settings.game_directory)
+        else:
+            self.choose_game_folder()
+
+    def choose_game_folder(self):
+        if self.busy:
+            return
+        folder = filedialog.askdirectory(parent=self.root, title='PSO2の pso2_bin/sub フォルダーを選択',
+            initialdir=self.settings.game_directory or None, mustexist=True)
+        if folder:
+            self.busy = True
+            self.notify('ゲームの版と配置先を確認しています…')
+            self.backend.submit('InstallLoader', path=folder)
+        else:
+            self.notify('DLLを配置していません。「設定」から再選択できます。保存ログの閲覧は可能です。')
+
+    def remove_loader(self):
+        if not self.busy:
+            self.busy = True
+            self.backend.submit('RemoveLoader')
 
     def toggle(self, key, value=None):
         setattr(self.settings, key, not getattr(self.settings, key) if value is None else value)
@@ -304,7 +345,12 @@ class Application:
             self.root.attributes('-topmost', self.settings.topmost)
         elif key == 'auto_quests':
             self.backend.submit('AutoOn' if self.settings.auto_quests else 'AutoOff')
+        self._sync_text_options()
         self.render()
+
+    def _sync_text_options(self):
+        self.backend.text_options = (self.settings.auto_text_export, self.settings.dps_mode,
+                                     self.settings.anonymize, self.settings.time_decimals)
 
     def set_opacity(self, value):
         self.settings.opacity = value
@@ -315,6 +361,20 @@ class Application:
             raise ValueError('Unknown DPS mode')
         self.settings.dps_mode = mode
         self.variables['dps_mode'].set(mode)
+        self._sync_text_options()
+        self.render()
+
+    def open_quest_csv(self):
+        try:
+            os.startfile(QUESTS_CSV)
+        except OSError as error:
+            self.last_error = str(error)
+            self.notify(f'クエスト名CSVを開けませんでした: {QUESTS_CSV}')
+
+    def reload_quest_names(self):
+        get_quest_catalog.cache_clear()
+        catalog = get_quest_catalog()
+        self.notify('クエスト名CSVを再読込しました。' if not catalog.error else 'クエスト名CSVを確認してください: ' + catalog.error)
         self.render()
 
     def reload_attack_names(self):
@@ -364,12 +424,34 @@ class Application:
                             '保存ログを表示しています。')
             else:
                 self.notify(event['message'])
+                if event['type'] == 'loader_installed':
+                    self.settings.game_directory = event['folder']
+                    try:
+                        self.settings.save(self.settings_path)
+                    except OSError as error:
+                        messagebox.showerror('設定を保存できません', str(error), parent=self.root)
+                elif event['type'] == 'loader_missing':
+                    messagebox.showerror('取得DLLの配置を確認してください', event['message'], parent=self.root)
+                    self.root.after_idle(self.choose_game_folder)
+                elif event['type'] == 'loader_reselect':
+                    messagebox.showinfo('LazyParseの更新', event['message'], parent=self.root)
+                    self.root.after_idle(self.choose_game_folder)
+                elif event['type'] == 'game_version_error':
+                    self.last_error = event['message']
+                    messagebox.showerror('PSO2のゲームDLLを確認してください', event['message'], parent=self.root)
                 if event['type'] == 'error':
                     self.last_error = event['message']
+                    if event.get('loader_action'):
+                        messagebox.showerror('取得DLLの配置を確認してください', event['message'], parent=self.root)
         if changed:
+            startup_error = preparation_error(self.latest)
+            if startup_error and startup_error != self.last_preparation_error:
+                self.last_error = startup_error
+                self.notify(startup_error)
+            self.last_preparation_error = startup_error
             self.snapshot = self.saved if self.saved is not None else self.latest
             self.render()
-        self.root.after(100, self._consume)
+        self.consume_timer = self.root.after(100, self._consume)
 
     def notify(self, text):
         self.notice = text
@@ -419,8 +501,9 @@ class Application:
         self.indicator.configure(bg=color)
         runtime = self.latest.get('runtime') or {}
         ready = self.saved is None and not self.busy and self.latest.get('worker_verified') and self.latest.get('heartbeat_fresh')
+        can_start = ready and not self.latest.get('game_version_error')
         requested = runtime.get('desired_recording', False)
-        self.start_button.configure(state='normal' if ready and not requested and runtime.get('identity_observing') and
+        self.start_button.configure(state='normal' if can_start and not requested and runtime.get('identity_observing') and
                                     not runtime.get('identity_context_error') and self.latest.get('state') != 'shutdown' else 'disabled')
         self.stop_button.configure(state='normal' if ready and requested else 'disabled')
         self.header.delete('all')
@@ -457,9 +540,8 @@ class Application:
                 self.table.create_text(x + 6 if key == 'name' else end - 6, y + self.row_height / 2,
                     text=text, anchor='w' if key == 'name' else 'e', fill=ACCENT if own and key == 'name' else TEXT,
                     font=bold if own and key == 'name' else current_font)
-        if not self.rows:
-            message = 'ログを開くか、取得ワーカーの準備後に記録を開始してください。' if not measurement else 'ダメージを待っています。'
-            self.table.create_text(width / 2, 38, text=message, fill=MUTED, font=current_font)
+        if not self.rows and measurement:
+            self.table.create_text(width / 2, 38, text='ダメージを待っています。', fill=MUTED, font=current_font)
         self.table.configure(scrollregion=(0, 0, width, len(self.rows) * self.row_height))
         if len(self.rows) * self.row_height > self.table.winfo_height():
             if not self.scrollbar.winfo_manager():
@@ -473,6 +555,8 @@ class Application:
         text = self.notice or f"Time {elapsed_label(elapsed, self.settings.time_decimals)} s    Total {number(total)}    DPS {number(dps, 1)}    Hits {sum(row['hits_dealt'] for row in self.rows)}"
         if flags and not self.notice:
             text += f'    ⚠ {len(flags)}'
+        if self.report.get('quest_measurement', {}).get('kind') == 'quest' and not self.notice:
+            text += '    ' + quest_label(self.report)
         outside = (snapshot.get('quest_view') or {}).get('outside_records', 0)
         if outside and measurement.get('quest_id') and not self.notice:
             text += f'    別枠 {outside}件'
@@ -507,6 +591,7 @@ class Application:
         menu = tk.Menu(self.root, tearoff=False)
         menu.add_command(label='攻撃別の詳細', command=self._open_selected)
         menu.add_command(label='一覧をコピー', command=self.copy)
+        menu.add_command(label='計測結果をTXTへ保存…', command=self.export_text)
         menu.tk_popup(event.x_root, event.y_root)
 
     def _sort(self, event):
@@ -554,6 +639,13 @@ class Application:
             self.notify('保存ログを表示中です。「ログ → 最新の状態へ戻る」で切り替えてください。')
             return
         runtime = self.latest.get('runtime') or {}
+        if startup_error := preparation_error(self.latest):
+            self.last_error = startup_error
+            self.notify(startup_error)
+            return
+        if action in {'Start', 'Next', 'Reset'} and self.latest.get('game_version_error'):
+            self.notify(self.latest['game_version_error'])
+            return
         if self.busy or not self.latest.get('worker_verified') or not self.latest.get('heartbeat_fresh') or self.latest.get('state') == 'shutdown':
             self.notify('取得ワーカーの準備を待っています。')
             return
@@ -587,7 +679,7 @@ class Application:
         if self.saved and self.saved.get('quest_view'):
             history = []
             quest_history = [{'report': report, 'label':
-                ('クエスト' if report['quest_measurement']['kind'] == 'quest' else 'クエスト外') +
+                (quest_label(report) if report['quest_measurement']['kind'] == 'quest' else 'クエスト外') +
                 f" #{report['quest_measurement']['number']}",
                 'complete': report['quest_measurement']['stream_finalized']}
                 for report in reversed(self.saved['quest_view']['history'])]
@@ -596,10 +688,17 @@ class Application:
                     'capture_path': entry.get('report_path'), 'complete': entry['complete'],
                     'display_state': {'clear_candidate': 'クリア候補',
                         'clear_candidate_with_result': '結果受信', 'left_quest_without_clear': '終了未確定',
+                        'failure_return_candidate': '失敗後帰還',
+                        'failure_candidate': '失敗',
                         'new_world': '次の受注', 'capture_stopped': '停止',
                         'observation_gap': '観測途切れ',
                         'outside_interval_ended': '区間外'}.get(entry['report']['quest_measurement']['end_reason'], '計測中'),
                     'report': entry['report']} for entry in quest_history] + history
+        known = {entry.get('capture_path') for entry in history}
+        quest_keys = {history_key(entry.get('report'), entry.get('capture_path')) for entry in history}
+        directory = getattr(self.backend, 'log_directory', STATE / 'logs')
+        history += [entry for entry in stored_history(directory) if entry['capture_path'] not in known
+                    and entry['history_key'] not in quest_keys]
         tree = ttk.Treeview(window, columns=('run', 'segment', 'damage', 'state'), show='headings', style='LazyParse.Treeview')
         for key, text, width in [('run', 'Run', 290), ('segment', 'Segment', 80), ('damage', 'Damage', 100), ('state', '保存', 100)]:
             tree.heading(key, text=text)
@@ -621,6 +720,17 @@ class Application:
                     self.render()
                 window.destroy()
         tree.bind('<Double-Button-1>', opened)
+        def popup(event):
+            item = tree.identify_row(event.y)
+            if not item:
+                return
+            tree.selection_set(item)
+            entry = history[int(item)]
+            menu = tk.Menu(window, tearoff=False)
+            menu.add_command(label='開く', command=lambda: opened(None))
+            menu.add_command(label='計測結果をTXTへ保存…', command=lambda: self.export_text(entry=entry, parent=window))
+            menu.tk_popup(event.x_root, event.y_root)
+        tree.bind('<Button-3>', popup)
         if not history:
             tk.Label(window, text='この監視中に確定した記録はありません。保存ログはメニューから開けます。').pack()
 
@@ -628,6 +738,35 @@ class Application:
         self.root.clipboard_clear()
         self.root.clipboard_append(clipboard_summary(self.report, self.rows, time_decimals=self.settings.time_decimals))
         self.notify('一覧をクリップボードへコピーしました。')
+
+    def export_text(self, *, entry=None, parent=None):
+        report = entry.get('report') if entry is not None else self.report
+        source = entry.get('capture_path') if entry is not None else None
+        if not report and not source:
+            self.notify('保存する集計がありません。')
+            return
+        try:
+            EXPORT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            self.last_error = str(error)
+            self.notify('TXT出力フォルダーを作成できませんでした。')
+            return
+        proposed = filename(report or {})
+        path = filedialog.asksaveasfilename(parent=parent or self.root, title='計測結果をTXTへ保存',
+            initialdir=str(EXPORT_DIRECTORY), initialfile=proposed, defaultextension='.txt',
+            filetypes=[('テキスト', '*.txt')])
+        if path:
+            self.busy = True
+            requested = {'measurement': {'report': deepcopy(report)}, 'export_source': source}
+            self.backend.submit('ExportText', snapshot=requested, path=path)
+
+    def open_export_folder(self):
+        try:
+            EXPORT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+            os.startfile(EXPORT_DIRECTORY)
+        except OSError as error:
+            self.last_error = str(error)
+            self.notify('TXT出力フォルダーを開けませんでした。')
 
     def export(self):
         if not self.report:
@@ -660,6 +799,14 @@ class Application:
             'quest_measurement': self.report.get('quest_measurement'),
             'outside_quest_records': (self.snapshot.get('quest_view') or {}).get('outside_records'),
             'auto_save_error': self.snapshot.get('auto_save_error'),
+            'text_export_error': self.snapshot.get('text_export_error'),
+            'quest_catalog_error': get_quest_catalog().error,
+            'worker_verified': self.latest.get('worker_verified'), 'worker_probe': self.latest.get('worker_probe'),
+            'heartbeat_fresh': self.latest.get('heartbeat_fresh'), 'state_error': self.latest.get('error'),
+            'runtime_heartbeat_fresh': self.latest.get('runtime_heartbeat_fresh'),
+            'runtime_worker_verified': self.latest.get('runtime_worker_verified'),
+            'runtime_worker_probe': self.latest.get('runtime_worker_probe'),
+            'preparation_error': preparation_error(self.latest),
             'runtime': self.latest.get('runtime'), 'last_error': getattr(self, 'last_error', None)}, ensure_ascii=False, indent=2))
         text.configure(state='disabled')
 
@@ -696,6 +843,9 @@ class Application:
             return
         self.closed = True
         self.tooltip.hide()
+        for timer in (self.consume_timer, self.visibility_timer, self.notice_timer):
+            if timer:
+                self.root.after_cancel(timer)
         self.settings.geometry = self.root.geometry()
         try:
             self.settings.save(self.settings_path)

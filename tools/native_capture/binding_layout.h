@@ -27,20 +27,20 @@ static inline BOOL binding_writable_slot(void **slot) {
 static inline DWORD binding_inspect_methods(uintptr_t base, void *expected_method, void *installed_method, BindingSnapshot *s) {
     memset(s, 0, sizeof(*s));
     s->stage = "client_global";
-    if (!binding_read(base + 0x3ceacf8, &s->client, 8)) return s->error = ERROR_PARTIAL_COPY;
+    if (!binding_read(base + OPC_CLIENT_GLOBAL_RVA, &s->client, 8)) return s->error = ERROR_PARTIAL_COPY;
     if (!s->client) return s->error = ERROR_NOT_READY;
     s->stage = "client_vtable";
     uintptr_t vtable;
     if (!binding_read(s->client, &vtable, 8)) return s->error = ERROR_PARTIAL_COPY;
-    if (vtable != base + 0x35a5680) return s->error = ERROR_INVALID_DATA;
+    if (vtable != base + OPC_CLIENT_VTABLE_RVA) return s->error = ERROR_INVALID_DATA;
     s->stage = "network_object";
     if (!binding_read(s->client + 0x1498, &s->network, 8)) return s->error = ERROR_PARTIAL_COPY;
     if (!s->network) return s->error = ERROR_NOT_READY;
     if (!binding_read(s->network, &vtable, 8)) return s->error = ERROR_PARTIAL_COPY;
-    if (vtable != base + 0x35a5560) return s->error = ERROR_INVALID_DATA;
+    if (vtable != base + OPC_NETWORK_VTABLE_RVA) return s->error = ERROR_INVALID_DATA;
     s->stage = "socket_vtable";
     if (!binding_read(s->network + 0x48, &vtable, 8)) return s->error = ERROR_PARTIAL_COPY;
-    if (vtable != base + 0x35a55e0) return s->error = ERROR_INVALID_DATA;
+    if (vtable != base + OPC_SOCKET_VTABLE_RVA) return s->error = ERROR_INVALID_DATA;
     s->stage = "listener_object";
     if (!binding_read(s->network + 0x101d8, &s->listener, 8)) return s->error = ERROR_PARTIAL_COPY;
     if (!s->listener) return s->error = ERROR_NOT_READY;
@@ -55,11 +55,11 @@ static inline DWORD binding_inspect_methods(uintptr_t base, void *expected_metho
     memcpy(&adjustment, object + 0x18, 4);
     memcpy(&owner, object + 0x20, 8);
     s->stage = "listener_binding";
-    if (vtable != base + 0x34c19f0 || (method != (uintptr_t)expected_method &&
+    if (vtable != base + OPC_LISTENER_VTABLE_RVA || (method != (uintptr_t)expected_method &&
         (!installed_method || method != (uintptr_t)installed_method)) ||
         owner != s->client || adjustment || refs <= 0 || refs > 1000000)
         return s->error = ERROR_INVALID_DATA;
-    if (!binding_read(vtable + 8, &adapter, 8) || adapter != base + 0x1770e0)
+    if (!binding_read(vtable + 8, &adapter, 8) || adapter != base + OPC_LISTENER_ADAPTER_RVA)
         return s->error = ERROR_INVALID_DATA;
     s->method_slot = s->listener + 0x10;
     s->stage = "method_slot_protection";
@@ -68,7 +68,7 @@ static inline DWORD binding_inspect_methods(uintptr_t base, void *expected_metho
        repeat this entire check inside the thread guard. */
     uintptr_t current_client, current_network, current_listener;
     s->stage = "owner_recheck";
-    if (!binding_read(base + 0x3ceacf8, &current_client, 8) ||
+    if (!binding_read(base + OPC_CLIENT_GLOBAL_RVA, &current_client, 8) ||
         !binding_read(s->client + 0x1498, &current_network, 8) ||
         !binding_read(s->network + 0x101d8, &current_listener, 8))
         return s->error = ERROR_PARTIAL_COPY;

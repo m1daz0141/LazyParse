@@ -1,54 +1,41 @@
-# PSO2 Classic x64取得部
+# PSO2 Classic x64 取得部
 
-Windows x64、PowerShell 7、Gitを使用します。対応版はソース中のSHA-256と受信構造の照合で限定します。ゲームDLL・取得済みパケット・生成されたDLL/EXEは同梱しません。
+現在の単体exeは、ゲームの受信登録先にあるコールバックのポインターを使って取得します。GUI・集計・配布方法は[ルートREADME](../../README.md)を参照してください。
 
-## ビルド
+## 現在の構成
 
-```powershell
-./tools/native_capture/build.ps1 -Bootstrap
-./tools/native_capture/build_autostart.ps1
-```
+- `capture.c`: 受信コールバック、ダメージ記録、接続先の検証・再接続。
+- `identity_observer.h`: 記録の停止中も継続する人物・敵・所有者・クエスト通知の記録。
+- `binding_layout.h`: 対応版の登録構造と、所有者・関数・書込先の検査。
+- `thread_guard.c`: 登録先を更新する際のスレッド同期。同期に失敗した場合は更新を中止します。
+- `capture_autostart.c`: ゲーム起動ごとの保存先作成、GUIからの開始・停止・終了操作。
+- `eos_capture_loader.c`: 追加する`eos_gaming.dll`のテンプレート。ゲームの元ファイルは置き換えません。
+- `profiles/classic-2026-10-21.json`: 対応するClassic／bridgeのハッシュと調査済みの配置情報。
 
-Bootstrapは固定版のZigとMinHookをインターネットから取得します。ツールチェーンと生成物は`vendor/`・`bin/`、模擬試験の記録は`captures/`へ置き、Git管理外とします。MinHookは元のライセンスを保持します。
+単体exeの取得DLLは、SHA-256・受信関数の命令列・パケット定義・登録構造・メモリー属性を照合します。一致した登録先だけを更新し、パケットのコピー後は元の関数へ同じデータを渡し、戻り値をそのまま返します。ゲームコードのページを書き換える旧MinHook方式は、単体exeには含めません。コールバックのポインター更新はプロセス内メモリーへの変更です。
 
-## 配置と取得
+Classicのアンロードを観測した後は、再ロードされた対応版を再検証して接続し直します。古い登録先へ書き戻しません。転送中の旧コールバック・検証失敗・スレッド同期失敗では切り替えを中止します。アンロードを観測できないままロード位置が変わった場合も中止するため、ゲームの通常再起動が必要になる場合があります。
 
-ゲームを通常終了した状態で、実際のインストール先の`pso2_bin/sub`を指定してください。
+## ビルドと試験
 
-```powershell
-$gameSub = 'C:\Games\PHANTASYSTARONLINE2\pso2_bin\sub'
-./tools/native_capture/autostart.ps1 -Action Install -GameBin $gameSub
-```
-
-配置するのは追加入口`eos_gaming.dll`の1個だけです。同名ファイルがある場合は上書きしません。既存ゲームDLLを置き換えず、対応版のハッシュと配置台帳を照合します。ビルド時の絶対パスが入口へ埋め込まれるため、ビルド後にフォルダーを移動した場合は、入口撤去後に再ビルドしてください。
-
-通常のランチャーから起動し、Classicロビー到達後、GUIで記録開始します。CLIも使えます。
+単体exe用のネイティブ部は次のスクリプトでビルドします。固定版Zigの配置方法とexe全体のビルド手順はルートREADMEにあります。
 
 ```powershell
-./tools/native_capture/autostart.ps1 -Action Status
-./tools/native_capture/autostart.ps1 -Action Start
-./tools/native_capture/autostart.ps1 -Action Stop
-./tools/native_capture/autostart.ps1 -Action Shutdown
+./tools/portable/build_native.ps1
 ```
 
-記録を停止して取得を終了し、PSO2を通常終了した後、同じGameBinを指定して撤去します。
+出力は`tools/portable/bin/`です。`Capture.dll`と`Loader.dll`だけを単体exeへ同梱します。`*Test*`や模擬ホストは開発用で、ゲームには配置しません。模擬用exportは本番DLLにありません。試験や調査用の処理はコンパイル条件で分離しています。
 
-```powershell
-./tools/native_capture/autostart.ps1 -Action Remove -GameBin $gameSub
-```
+`tools/native_capture/build.ps1`など、このディレクトリの従来スクリプトは旧版の調査・比較用です。MinHookを使う旧ビルドもここに残していますが、現在の単体exeの配置・更新にはGUIの「設定」を使ってください。旧ビルドのDLLや台帳を現行版へ流用しないでください。
 
-台帳とハッシュが一致する追加入口だけを削除します。稼働中や不一致の場合は拒否します。
+## 保存形式
 
-## 仕組み
+- `logs/captures/run-…/identity-context/identity.opmeta`: 記録開始前・停止中を含む識別通知。
+- `segment-…/capture.opcap`: その記録区間のダメージ原本。
+- `identity-context.json`: 区間と識別ジャーナルを結ぶ時刻・プロセス・版の情報。
+- `autostart-state.json`: GUIが読むワーカー状態・操作結果・診断情報。
+- `binding-probe.json`と`continuity-events.jsonl`: 登録先の確認結果と状態遷移。
 
-追加入口は別の取得DLLをワークスペースから読み込みます。取得DLLは検証済みの登録済み受信コールバックのslotを使用し、必要な通知をコピーして、元コールバックを同じ引数で1回呼びます。戻り値も元処理のものを返し、パケットの書換えや送信は行いません。保存は別スレッドです。新しいslot方式ではゲームのコード・vtable・メモリー保護属性を変更しません。過去の比較試験用コードも含まれますが、自動的な別経路へのfallbackは行いません。
+OPCAP v1とOPMETA v1／v2の既存データを読み取れます。集計やクエスト判定の変更で原本を削除・上書きしません。実際のプレイヤー名などが含まれるため、取得記録・調査結果・ローカル設定はGit管理対象外です。
 
-OPCAPはダメージ、OPMETAは限定した識別通知を保持します。人物名・IDを含むため記録の公開前には別途確認が必要です。停止中も識別監視を続け、Shutdownで終了します。各起動で新しいrun、各Startで新しいsegmentを作り、前の操作を引き継ぎません。
-
-## 模擬試験
-
-```powershell
-./tools/native_capture/test.ps1
-```
-
-ビルド済みの独立テストホストを使用します。ゲームの起動は不要です。
+外部サーバーへデータを送信する処理はありません。GUIとの操作・結果共有はローカルファイルで行います。

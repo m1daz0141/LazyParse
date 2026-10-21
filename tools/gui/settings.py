@@ -5,8 +5,9 @@ import re
 
 from .viewmodel import DEFAULT_COLUMNS, COLUMNS
 from .timing import DPS_MODES
+from ..paths import CONFIG
 
-STATE = Path(__file__).resolve().parent / 'state'
+STATE = CONFIG
 
 
 @dataclass
@@ -22,6 +23,8 @@ class Settings:
     auto_quests: bool = True
     dps_mode: str = 'quest'
     time_decimals: bool = True
+    auto_text_export: bool = False
+    game_directory: str = ''
     font_size: int = 9
     interval: float = 0.5
     columns: list = field(default_factory=lambda: DEFAULT_COLUMNS.copy())
@@ -33,11 +36,13 @@ class Settings:
             values = json.loads(path.read_text(encoding='utf-8'))
             if values.get('schema_version') != 1:
                 return result
-            for name in ('topmost', 'players_only', 'only_me', 'anonymize', 'bars', 'highlight_self', 'auto_quests', 'time_decimals'):
+            for name in ('topmost', 'players_only', 'only_me', 'anonymize', 'bars', 'highlight_self', 'auto_quests', 'time_decimals', 'auto_text_export'):
                 if type(values.get(name)) is bool:
                     setattr(result, name, values[name])
             if values.get('dps_mode') in DPS_MODES:
                 result.dps_mode = values['dps_mode']
+            if isinstance(values.get('game_directory'), str):
+                result.game_directory = values['game_directory']
             if re.fullmatch(r'[0-9]{3,4}x[0-9]{3,4}[+-][0-9]{1,5}[+-][0-9]{1,5}', str(values.get('geometry', ''))):
                 result.geometry = values['geometry']
             for name, low, high in [('opacity', 0.3, 1), ('font_size', 8, 16), ('interval', 0.1, 3)]:

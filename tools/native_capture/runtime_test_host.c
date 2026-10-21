@@ -1,6 +1,9 @@
 /* Control-worker fixture. The capture backend is a stub; native packet and
    object-lifetime behavior is covered separately by ContinuityTestHost. */
 #include "runtime_control.h"
+#include "thread_guard.h"
+
+void CaptureGuardDiagnostics(OpcGuardDiagnostics *out) { ZeroMemory(out, sizeof(*out)); }
 
 DWORD WINAPI CaptureAutostart(void *unused);
 static wchar_t root[OPC_PATH_CHARS], current_directory[OPC_PATH_CHARS];

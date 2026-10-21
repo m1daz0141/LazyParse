@@ -45,6 +45,7 @@ static void observer_enqueue(const unsigned char *packet, unsigned limit) {
 
 static void observer_packet(const unsigned char *packet) {
     if (!packet) return;
+    qcat_packet(packet, observer_wake);
     unsigned limit = identity_prefix_limit(packet[5], packet[6] | ((unsigned)packet[7] << 8));
     if (limit) observer_enqueue(packet, limit);
 }
@@ -105,6 +106,8 @@ static DWORD WINAPI observer_writer(void *unused) {
             InterlockedPushEntrySList(&observer_free, &entry->link);
         }
         if (!observer_error && !FlushFileBuffers(observer_file)) InterlockedExchange(&observer_error, GetLastError());
+        qcat_drain();
+        qcat_status(stopping);
         if (!observer_error) InterlockedExchange64(&observer_watermark, through.QuadPart);
         else InterlockedExchange(&observer_accepting, 0);
         DWORD publish_error = observer_status(stopping);
@@ -116,6 +119,7 @@ static DWORD WINAPI observer_writer(void *unused) {
         if (WaitForMultipleObjects(2, events, FALSE, 100) == WAIT_OBJECT_0) stopping = TRUE;
     }
     CloseHandle(observer_file); observer_file = INVALID_HANDLE_VALUE;
+    qcat_close();
     return 0;
 }
 
@@ -129,13 +133,15 @@ static DWORD start_observer(const OpcConfig *config, void *target, BOOL is_mock,
     if ((previous != 0 && previous != 3) || InterlockedCompareExchange(&lifecycle, 1, previous) != previous)
         return ERROR_BUSY;
     DWORD error = 0;
-    mock_mode = is_mock;
+    uintptr_t candidate_base;
     if (!is_mock) {
         error = verify_classic(&target);
         if (error) goto fail;
-        profile_base = (uintptr_t)GetModuleHandleW(L"pso2classic.dll");
-    } else profile_base = (uintptr_t)mock_base;
+        candidate_base = (uintptr_t)GetModuleHandleW(L"pso2classic.dll");
+    } else candidate_base = (uintptr_t)mock_base;
     if (hook_installed && hook_target != target) { error = ERROR_REVISION_MISMATCH; goto fail; }
+    mock_mode = is_mock;
+    profile_base = candidate_base;
     if (!profile_base && !method_slot) { error = ERROR_INVALID_PARAMETER; goto fail; }
     hook_target = target; fixture_slot = method_slot; slot_hook_mode = TRUE;
     original_callback = (ReceiveCallback)target;
@@ -160,6 +166,8 @@ static DWORD start_observer(const OpcConfig *config, void *target, BOOL is_mock,
     QueryPerformanceFrequency(&frequency); observer_started = opc_filetime();
     OpcHeader header = {{'O','P','M','E','T','A','0','2'},2,sizeof(OpiRecord),(uint64_t)frequency.QuadPart,observer_started};
     if (!observer_write(observer_file, &header, sizeof(header))) { error = (DWORD)observer_error; goto fail; }
+    error = qcat_start(observer_directory, (uint64_t)frequency.QuadPart, observer_started);
+    if (error) goto fail;
     observer_wake = CreateEventW(NULL, FALSE, FALSE, NULL); observer_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!observer_wake || !observer_stop) { error = GetLastError(); goto fail; }
     observer_thread = CreateThread(NULL, 0, observer_writer, NULL, 0, NULL);
@@ -168,6 +176,7 @@ static DWORD start_observer(const OpcConfig *config, void *target, BOOL is_mock,
     InterlockedExchange(&lifecycle, previous);
     return 0;
 fail:
+    qcat_close();
     if (observer_file != INVALID_HANDLE_VALUE) { CloseHandle(observer_file); observer_file = INVALID_HANDLE_VALUE; }
     if (observer_wake) { CloseHandle(observer_wake); observer_wake = NULL; }
     if (observer_stop) { CloseHandle(observer_stop); observer_stop = NULL; }

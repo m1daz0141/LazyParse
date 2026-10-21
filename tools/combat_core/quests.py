@@ -9,10 +9,135 @@ from .engine import CombatEngine
 from .metadata import MetadataTimeline
 from .model import ObjectRef
 from .quest_probe import inspect_notice
+from .identity_fields import spawn_name
+from .damage_policy import included_totals
 
 SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b861243332'
-RULE_VERSION = 2
+# Old recordings keep their original source hash. New-client packet layout was
+# checked offline; live validation is recorded separately in the native profile.
+SUPPORTED_CLASSICS = frozenset({SUPPORTED_CLASSIC,
+    'b434e9e245a1ba02a71fefb360c5a25b6063b616a474da4ba0fca4867ad7f3e3'})
+RULE_VERSION = 9
 TIMED_GAP_FLAGS = {'binding_gap', 'identity_context_binding_reset'}
+# This adjacent pair was observed only for 1132. Other observed return layouts
+# have their own scoped rules; incapacitation alone is not a universal end.
+FAILURE_RETURN_QUESTS = frozenset({1132})
+EXTREME_QUESTS = frozenset({1025, 1027})
+STORY_DUEL = 939
+# Match complete observed success layouts independently of the quest ID/name
+# catalog. Intermediate stage notifications have different layouts; neither
+# 0b:26 nor 0b:11 alone authorizes closing a measurement.
+CLEAR_PATTERNS = (
+    (((0xb, 0x26), 24), ((0xb, 0x11), 48)),
+    (((0xb, 0x26), 24), ((0xb, 0x11), 24)),
+    (((0xb, 0x26), 24), ((0xb, 0x4e), 12), ((0xb, 0x44), 32), ((0xb, 0x11), 72)),
+    (((0xb, 0x26), 24), ((0xb, 0xed), 24), ((0xb, 0xf0), 32), ((0xb, 0x11), 24)),
+    # Masquerade success also has a 20-byte f0 body without an object spawn.
+    # Retain the entire adjacent result sequence, not an arbitrary f0 size.
+    (((0xb, 0x26), 24), ((0xb, 0xed), 24), ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
+    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xed), 24),
+           ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
+    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xf1), 20),
+           ((0xb, 0xcf), 32), ((0xb, 0xfe), 44), ((0xb, 0xff), 48),
+           ((0xb, 0xfc), 11680), ((0xb, 0xf1), 20), ((0xb, 0xf1), 20),
+           ((0xb, 0xcc), 24), ((0xb, 0x11), 36)),
+    # Step 30: same complete final-result sequence, with an observed shorter
+    # 0b:fc body. Intermediate stages also use 11600; size alone is not an end.
+    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xf1), 20),
+           ((0xb, 0xcf), 32), ((0xb, 0xfe), 44), ((0xb, 0xff), 48),
+           ((0xb, 0xfc), 11600), ((0xb, 0xf1), 20), ((0xb, 0xf1), 20),
+           ((0xb, 0xcc), 24), ((0xb, 0x11), 36)),
+)
+
+
+class ClearNotice:
+    """Complete observed success layouts, shared across quest IDs."""
+    def __init__(self, frequency):
+        self.frequency = frequency
+        self.reset()
+
+    def reset(self):
+        self.events = []
+
+    def feed(self, event):
+        shape = (event.packet_id, event.packet_size)
+        if shape == ((0xb, 0x26), 24):
+            self.events = [event]
+            return None
+        if not self.events:
+            return None
+        if (event.sequence != self.events[-1].sequence + 1 or
+                not 0 <= event.qpc - self.events[0].qpc <= self.frequency // 20):
+            self.reset()
+            return None
+        if shape == ((8, 0xb), 192):
+            name, _, status = spawn_name(event)
+            if (len(event.prefix) < 20 or ObjectRef.from_packet(event.prefix, 8).entity_type != 6
+                    or status != 'complete' or not name):
+                self.reset()
+                return None
+        self.events.append(event)
+        shapes = tuple((e.packet_id, e.packet_size) for e in self.events)
+        if shapes in CLEAR_PATTERNS:
+            sequences = [e.sequence for e in self.events]
+            self.reset()
+            return sequences
+        if not any(shapes == pattern[:len(shapes)] for pattern in CLEAR_PATTERNS):
+            self.reset()
+        return None
+
+
+class CampshipReturn:
+    """1130 return; Extreme returns additionally require a failure notice."""
+    def __init__(self, frequency):
+        self.frequency = frequency
+        self.reset()
+
+    def reset(self):
+        self.transfer = self.marker = self.failure = None
+
+    def feed(self, event, quest):
+        if quest not in {1130, *EXTREME_QUESTS}:
+            self.reset()
+            return None
+        if quest in EXTREME_QUESTS and event.packet_id == (0xb, 0x27) and event.packet_size == 48:
+            self.reset()
+            self.failure = event
+            return None
+        if event.packet_id == (3, 0):
+            failure = self.failure
+            self.reset()
+            if quest in EXTREME_QUESTS and (failure is None or failure.sequence >= event.sequence or
+                    not 0 <= event.qpc - failure.qpc <= 30 * self.frequency):
+                return None
+            if (event.packet_size == 84 and len(event.prefix) == 84
+                    and ObjectRef.from_packet(event.prefix, 8).entity_type == 5
+                    and ObjectRef.from_packet(event.prefix, 8).object_id
+                    and ObjectRef.from_packet(event.prefix, 20).entity_type == 4
+                    and ObjectRef.from_packet(event.prefix, 20).object_id):
+                self.transfer = event
+                self.failure = failure
+            return None
+        if self.transfer is None:
+            return None
+        if not 0 <= event.qpc - self.transfer.qpc <= self.frequency:
+            self.reset()
+            return None
+        if event.packet_id == (8, 0xb) and event.packet_size == 168 and len(event.prefix) >= 0x44:
+            name, _, status = spawn_name(event)
+            if (ObjectRef.from_packet(event.prefix, 8).entity_type == 6
+                    and name == 'oa_campship_exit' and status == 'complete'):
+                self.marker = event
+        if event.packet_id == (0xb, 0x21):
+            sequences = None
+            if (event.packet_size == 12 and self.marker is not None
+                    and self.transfer.sequence < self.marker.sequence < event.sequence):
+                sequences = [self.transfer.sequence, self.marker.sequence, event.sequence]
+                if quest in EXTREME_QUESTS:
+                    sequences.insert(0, self.failure.sequence)
+            self.reset()
+            return sequences
+        return None
 
 
 class QuestBucket:
@@ -23,6 +148,10 @@ class QuestBucket:
         self.end = self.reason = self.result_qpc = None
         self.start_sequence = self.end_sequence = self.result_sequence = None
         self.clear_pair_sequences = None
+        self.clear_notice_sequences = None
+        self.failure_notice_sequence = None
+        self.failure_return_pair_sequences = None
+        self.campship_return_sequences = None
         self.local_flags = set()
         self.engine = CombatEngine(owner.idle_seconds)
         # The parent stream validates global sequence continuity; a logical
@@ -52,7 +181,7 @@ class QuestBucket:
             span['end_qpc'] = max(span['first_damage_qpc'], through)
             span['end_evidence'] = self.reason if self.end is not None else 'latest_observed_qpc'
         elapsed = sum((s['end_qpc'] - s['first_damage_qpc']) / s['qpc_frequency'] for s in timing['spans'])
-        timing.update(elapsed_seconds=elapsed, dps=result['counts']['positive_sum'] / elapsed if elapsed else None,
+        timing.update(elapsed_seconds=elapsed, dps=included_totals(result)['positive_sum'] / elapsed if elapsed else None,
                       quest_end_detection=self.reason or 'quest_measurement_in_progress')
         for group in [*result['actors'], *result['attacks'], *result['roles'].values()]:
             group['dps'] = group['damage_dealt'] / elapsed if elapsed else None
@@ -69,6 +198,10 @@ class QuestBucket:
             'source_sha256': self.owner.source_sha256,
             'start_notice_sequence': self.start_sequence, 'end_notice_sequence': self.end_sequence,
             'clear_pair_sequences': self.clear_pair_sequences, 'result_notice_sequence': self.result_sequence,
+            'clear_notice_sequences': self.clear_notice_sequences,
+            'failure_notice_sequence': self.failure_notice_sequence,
+            'failure_return_pair_sequences': self.failure_return_pair_sequences,
+            'campship_return_sequences': self.campship_return_sequences,
             'stream_finalized': self.owner.finalized, 'capture_id': self.owner.capture_id}
         result['quality']['flags'] = sorted(set(result['quality']['flags']) | self.owner.flags | self.local_flags)
         result['quality']['per_capture'][self.owner.capture_id] = sorted(
@@ -81,7 +214,7 @@ class QuestSession:
         self.capture_id, self.start, self.frequency = capture_id, start_qpc, frequency
         self.idle_seconds = idle_seconds
         self.source_sha256 = source_sha256
-        self.supported = source_sha256 == SUPPORTED_CLASSIC
+        self.supported = source_sha256 in SUPPORTED_CLASSICS
         self.suspended = False
         self.hard_suspended = self.timed_suspended = False
         self.gap_qpc = None
@@ -94,7 +227,16 @@ class QuestSession:
         self.buckets = []
         self.seeded = False
         self.active = self.last_quest = None
-        self.last_clear_prefix = None
+        self.last_failure_return_prefix = None
+        self.campship_return = CampshipReturn(frequency)
+        self.clear_notice = ClearNotice(frequency)
+
+    def failure_return_pair(self, prefix, event, quest):
+        return (quest in FAILURE_RETURN_QUESTS and prefix is not None
+                and prefix.packet_id == (0xb, 0x21) and prefix.packet_size == 12
+                and event.packet_id == (0xb, 0x27) and event.packet_size == 120
+                and event.sequence == prefix.sequence + 1
+                and 0 <= event.qpc - prefix.qpc <= self.frequency // 20)
 
     @staticmethod
     def level(event):
@@ -130,6 +272,9 @@ class QuestSession:
             # This locally generated journal marker timestamps the lost
             # binding. Do not invalidate already completed earlier quests.
             self.timed_suspended = self.suspended = True
+            self.last_failure_return_prefix = None
+            self.campship_return.reset()
+            self.clear_notice.reset()
             if self.gap_qpc is None:
                 self.gap_qpc = event.qpc
             self.active.local_flags.update(TIMED_GAP_FLAGS)
@@ -141,33 +286,53 @@ class QuestSession:
         level = self.level(event)
         if level is not None:
             world, quest = level
-            self.last_clear_prefix = None
+            self.last_failure_return_prefix = None
+            self.campship_return.reset()
+            self.clear_notice.reset()
             if world:
                 if self.active.kind == 'quest' and (self.active.world, self.active.quest) == level:
                     return  # Repeated notification in the same live instance.
-                if (self.active.kind == 'after_clear' and self.last_quest is not None
-                        and (self.last_quest.world, self.last_quest.quest) == level):
-                    return  # A same-world load after clear is not a new attempt.
+                if (self.active.kind in {'after_clear', 'after_failure'}
+                        and (self.active.world, self.active.quest) == level):
+                    return  # A same-world load after completion is not a new attempt.
                 self._close(event.qpc, 'new_world', event.sequence)
                 self._new(event.qpc, 'quest', world, quest).start_sequence = event.sequence
             else:
                 self._close(event.qpc, 'left_quest_without_clear' if self.active.kind == 'quest' else 'outside_interval_ended', event.sequence)
                 self._new(event.qpc, 'outside_quest').start_sequence = event.sequence
             return
-        if event.packet_id == (0xb, 0x26) and event.packet_size == 24:
-            self.last_clear_prefix = event
-        elif event.packet_id == (0xb, 0x11):
-            prefix, self.last_clear_prefix = self.last_clear_prefix, None
-            # Require the observed pair, its sizes, order and tight QPC spacing.
-            # Header-only evidence remains explicitly experimental even if a
-            # later result corroborates it; this is not a universal clear rule.
-            if (prefix is not None and event.packet_size == 48 and self.active.kind == 'quest'
-                    and event.sequence == prefix.sequence + 1
-                    and 0 <= event.qpc - prefix.qpc <= self.frequency // 20):
+        clear_sequences = self.clear_notice.feed(event)
+        if clear_sequences and self.active.kind == 'quest':
+            world, quest = self.active.world, self.active.quest
+            self.active.clear_notice_sequences = clear_sequences
+            self.active.clear_pair_sequences = [clear_sequences[0], clear_sequences[-1]]
+            self._close(event.qpc, 'clear_candidate', event.sequence)
+            self._new(event.qpc, 'after_clear', world, quest).start_sequence = event.sequence
+            return
+        return_sequences = self.campship_return.feed(event, self.active.quest)
+        if return_sequences and self.active.kind == 'quest':
+            world, quest = self.active.world, self.active.quest
+            self.active.campship_return_sequences = return_sequences
+            self.last_failure_return_prefix = None
+            self._close(event.qpc, 'failure_return_candidate', event.sequence)
+            self._new(event.qpc, 'after_failure', world, quest).start_sequence = event.sequence
+            return
+        if event.packet_id == (0xb, 0x21):
+            self.last_failure_return_prefix = event
+        elif event.packet_id == (0xb, 0x27):
+            prefix, self.last_failure_return_prefix = self.last_failure_return_prefix, None
+            if (self.active.kind == 'quest' and self.active.quest == STORY_DUEL
+                    and event.packet_size == 120):
                 world, quest = self.active.world, self.active.quest
-                self.active.clear_pair_sequences = [prefix.sequence, event.sequence]
-                self._close(event.qpc, 'clear_candidate', event.sequence)
-                self._new(event.qpc, 'after_clear', world, quest).start_sequence = event.sequence
+                self.active.failure_notice_sequence = event.sequence
+                self._close(event.qpc, 'failure_candidate', event.sequence)
+                self._new(event.qpc, 'after_failure', world, quest).start_sequence = event.sequence
+            elif (self.active.kind == 'quest'
+                    and self.failure_return_pair(prefix, event, self.active.quest)):
+                world, quest = self.active.world, self.active.quest
+                self.active.failure_return_pair_sequences = [prefix.sequence, event.sequence]
+                self._close(event.qpc, 'failure_return_candidate', event.sequence)
+                self._new(event.qpc, 'after_failure', world, quest).start_sequence = event.sequence
         elif event.packet_id == (0xb, 0x14) and self.last_quest is not None:
             if self.last_quest.reason == 'clear_candidate' and self.active.kind == 'after_clear':
                 self.last_quest.result_qpc = event.qpc
@@ -187,28 +352,45 @@ class QuestSession:
         self.suspended = self.hard_suspended or self.timed_suspended
         if not self.seeded:
             level = None
-            prefix = None
-            cleared = False
+            failure_prefix = None
+            terminal_kind = None
             while self.position < len(identities) and identities[self.position].qpc <= self.start:
                 event = identities[self.position]
+                clear_sequences = self.clear_notice.feed(event)
+                return_sequences = self.campship_return.feed(event, level[1] if level and level[0] else None)
                 if event.packet_id == (0xff, 1):
-                    level, prefix, cleared = None, None, False
+                    self.campship_return.reset()
+                    self.clear_notice.reset()
+                    level, failure_prefix, terminal_kind = None, None, None
                     self.timed_suspended = self.suspended = True
                 elif self.supported and not self.hard_suspended and (candidate := self.level(event)) is not None:
+                    self.campship_return.reset()
+                    self.clear_notice.reset()
+                    if candidate != level:
+                        terminal_kind = None
                     level = candidate
-                    cleared, prefix = False, None
+                    failure_prefix = None
                     self.timed_suspended = False
                     self.suspended = self.hard_suspended
-                elif event.packet_id == (0xb, 0x26) and event.packet_size == 24:
-                    prefix = event
-                elif event.packet_id == (0xb, 0x11):
-                    if (prefix and event.packet_size == 48 and event.sequence == prefix.sequence + 1
-                            and 0 <= event.qpc - prefix.qpc <= self.frequency // 20):
-                        cleared = True
-                    prefix = None
+                elif event.packet_id == (0xb, 0x21):
+                    failure_prefix = event
+                elif event.packet_id == (0xb, 0x27):
+                    if (terminal_kind is None and level and level[0] and
+                            (self.failure_return_pair(failure_prefix, event, level[1]) or
+                             level[1] == STORY_DUEL and event.packet_size == 120)):
+                        terminal_kind = 'after_failure'
+                    failure_prefix = None
+                if clear_sequences and level and level[0] and terminal_kind is None:
+                    terminal_kind = 'after_clear'
+                if (return_sequences and terminal_kind is None and self.supported
+                        and not self.suspended and level and level[0]):
+                    terminal_kind = 'after_failure'
                 self.position += 1
+            # A paired notification can straddle recording start. Keep its
+            # prefix, with the same sequence/time checks as live observation.
+            self.last_failure_return_prefix = failure_prefix
             if level and level[0]:
-                self._new(self.start, 'after_clear' if cleared else 'quest', *level, partial=True)
+                self._new(self.start, terminal_kind or 'quest', *level, partial=True)
             else:
                 self._new(self.start, 'outside_quest')
             self.seeded = True

@@ -90,6 +90,39 @@ class RuntimeFixture:
 
 
 class LiveMonitorTests(unittest.TestCase):
+    def test_startup_failure_keeps_runtime_freshness_separate_from_missing_journal(self):
+        from tools.gui.control import preparation_error
+        with tempfile.TemporaryDirectory() as root:
+            fixture = RuntimeFixture(root)
+            fixture.state.update(state='identity_context_error', identity_observing=False,
+                                 identity_context_error=5, guard_error=5, guard_stage=3)
+            fixture.write_state()
+            (fixture.context/'context-status.json').unlink()
+            monitor = fixture.monitor()
+            current = monitor.poll()
+            self.assertTrue(current['runtime_heartbeat_fresh'])
+            self.assertTrue(current['runtime_worker_verified'])
+            self.assertFalse(current['worker_verified'])
+            self.assertFalse(current['heartbeat_fresh'])
+            self.assertIn('Win32=5', preparation_error(current))
+            fixture.now += 60_000_000  # Previous run has stopped publishing.
+            old = monitor.poll()
+            self.assertFalse(old['runtime_heartbeat_fresh'])
+            self.assertIsNone(preparation_error(old))
+            fixture.dead = True
+            fixture.write_state()
+            self.assertIsNone(preparation_error(monitor.poll()))
+            fixture.dead = False
+            fixture.process_started = fixture.now + 1  # Reused PID belongs to a newer process.
+            reused = monitor.poll()
+            self.assertTrue(reused['runtime_heartbeat_fresh'])
+            self.assertFalse(reused['runtime_worker_verified'])
+            self.assertIsNone(preparation_error(reused))
+            (fixture.root/'autostart-state.json').unlink()
+            missing = monitor.poll()
+            self.assertFalse(missing['runtime_heartbeat_fresh'])
+            self.assertIsNone(preparation_error(missing))
+
     def test_wait_before_files_exist_and_context_read_error_recovers(self):
         with tempfile.TemporaryDirectory() as root:
             monitor = RuntimeMonitor(root)

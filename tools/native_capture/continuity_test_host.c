@@ -18,7 +18,7 @@ static uintptr_t original(void *client, const unsigned char *packet) {
 static uintptr_t *new_listener(void) {
     uintptr_t *p = VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!p) return NULL;
-    p[0] = (uintptr_t)profile + 0x34c19f0; p[1] = 2;
+    p[0] = (uintptr_t)profile + OPC_LISTENER_VTABLE_RVA; p[1] = 2;
     p[2] = (uintptr_t)&original; p[3] = 0; p[4] = (uintptr_t)owner;
     return p;
 }
@@ -29,18 +29,19 @@ static int fail(const char *text) {
 }
 
 static BOOL connect_model(void) {
-    profile = VirtualAlloc(NULL, 0x3ceb000, MEM_RESERVE, PAGE_NOACCESS);
+    SIZE_T image_size = (OPC_REQUIRED_IMAGE_SIZE + 0xffffu) & ~(SIZE_T)0xffffu;
+    profile = VirtualAlloc(NULL, image_size, MEM_RESERVE, PAGE_NOACCESS);
     owner = VirtualAlloc(NULL, 0x2000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     network = VirtualAlloc(NULL, 0x11000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!profile || !owner || !network ||
-        !VirtualAlloc(profile + 0x3cea000, 4096, MEM_COMMIT, PAGE_READWRITE) ||
-        !VirtualAlloc(profile + 0x34c1000, 4096, MEM_COMMIT, PAGE_READWRITE)) return FALSE;
-    *(uintptr_t *)(profile + 0x3ceacf8) = (uintptr_t)owner;
-    *(uintptr_t *)owner = (uintptr_t)profile + 0x35a5680;
+        !VirtualAlloc(profile + (OPC_CLIENT_GLOBAL_RVA & ~0xfffu), 4096, MEM_COMMIT, PAGE_READWRITE) ||
+        !VirtualAlloc(profile + (OPC_LISTENER_VTABLE_RVA & ~0xfffu), 4096, MEM_COMMIT, PAGE_READWRITE)) return FALSE;
+    *(uintptr_t *)(profile + OPC_CLIENT_GLOBAL_RVA) = (uintptr_t)owner;
+    *(uintptr_t *)owner = (uintptr_t)profile + OPC_CLIENT_VTABLE_RVA;
     *(uintptr_t *)(owner + 0x1498) = (uintptr_t)network;
-    *(uintptr_t *)network = (uintptr_t)profile + 0x35a5560;
-    *(uintptr_t *)(network + 0x48) = (uintptr_t)profile + 0x35a55e0;
-    *(uintptr_t *)(profile + 0x34c19f8) = (uintptr_t)profile + 0x1770e0;
+    *(uintptr_t *)network = (uintptr_t)profile + OPC_NETWORK_VTABLE_RVA;
+    *(uintptr_t *)(network + 0x48) = (uintptr_t)profile + OPC_SOCKET_VTABLE_RVA;
+    *(uintptr_t *)(profile + OPC_LISTENER_VTABLE_RVA + 8) = (uintptr_t)profile + OPC_LISTENER_ADAPTER_RVA;
     listener = new_listener();
     if (!listener) return FALSE;
     *(uintptr_t *)(network + 0x101d8) = (uintptr_t)listener;
@@ -93,7 +94,8 @@ int wmain(int argc, wchar_t **argv) {
     OpcControl stop = (OpcControl)(uintptr_t)GetProcAddress(dll, "CaptureStop");
     OpcControl poll = (OpcControl)(uintptr_t)GetProcAddress(dll, "CaptureMaintain");
     OpcControl health = (OpcControl)(uintptr_t)GetProcAddress(dll, "CaptureGetHealth");
-    if (!start || !stop || !poll || !health) return fail("exports");
+    OpcControl deny_guard = (OpcControl)(uintptr_t)GetProcAddress(dll, "CaptureTestSetGuardDenied");
+    if (!start || !stop || !poll || !health || !deny_guard) return fail("exports");
     wchar_t root[OPC_PATH_CHARS];
     if (!GetFullPathNameW(argv[2], OPC_PATH_CHARS, root, NULL) || !CreateDirectoryW(root, NULL)) return fail("root");
     OpcTestConfig config = {0};
@@ -103,18 +105,26 @@ int wmain(int argc, wchar_t **argv) {
     for (int i = 1; i <= 10; ++i) if (!send_packet(i)) return fail("first recording");
     if (stop(NULL) || stop(NULL)) return fail("idempotent stop");
     for (int i = 0; i < 7; ++i) if (!send_packet(777777)) return fail("paused forwarding");
+    if (deny_guard((void *)(uintptr_t)1)) return fail("deny later guard operations");
     if (!set_output(&config, root, L"part-2") || start(&config)) return fail("restart without game exit");
+    OpcHealth state = {0}; state.size = sizeof(state); state.abi = OPC_ABI;
+    if (health(&state) || !state.recording || !state.binding_ready || state.guard_error || state.guard_stage)
+        return fail("existing registration reused without a guard");
     for (int i = 11; i <= 20; ++i) if (!send_packet(i)) return fail("second recording");
     uintptr_t *old = listener;
     listener = new_listener();
     if (!listener) return 1;
     *(uintptr_t *)(network + 0x101d8) = (uintptr_t)listener;
     VirtualFree(old, 0, MEM_RELEASE);
+    if (poll(NULL) != ERROR_ACCESS_DENIED || listener[2] != (uintptr_t)&original)
+        return fail("changed registration still refuses denied guard");
+    if (deny_guard(NULL)) return fail("restore guard operations");
+    /* Maintain intentionally backs off after a failed guard operation. */
+    Sleep(5100);
     if (poll(NULL)) return fail("freed listener replaced");
     for (int i = 21; i <= 30; ++i) if (!send_packet(i)) return fail("reattached recording");
     *(uintptr_t *)(owner + 0x1498) = 0;
     if (poll(NULL) != ERROR_NOT_READY) return fail("disconnect detected");
-    OpcHealth state = {0}; state.size = sizeof(state); state.abi = OPC_ABI;
     if (health(&state) || !state.requested || state.recording || state.binding_ready) return fail("disconnected health");
     if (!send_packet(888888)) return fail("forward through old connection while paused");
     *(uintptr_t *)(owner + 0x1498) = (uintptr_t)network;
@@ -154,7 +164,7 @@ int wmain(int argc, wchar_t **argv) {
     if (health(&state) || state.recording || state.requested || state.binding_generation < 3 || state.connection_gaps < 3)
         return fail("final health");
     if (InterlockedCompareExchange(&calls, 0, 0) != 208) return fail("every original call exactly once");
-    printf("PASS: stop/restart, listener destruction, disconnect, foreign slot, concurrent replacement; generations=%llu gaps=%llu\n",
+    printf("PASS: no-write restart with denied guard, blocked new registration, listener destruction, disconnect, foreign slot, concurrent replacement; generations=%llu gaps=%llu\n",
            (unsigned long long)state.binding_generation, (unsigned long long)state.connection_gaps);
     return 0;
 }

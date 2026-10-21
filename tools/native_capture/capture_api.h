@@ -5,8 +5,20 @@
 
 #define OPC_ABI 1
 #define OPC_PATH_CHARS 1024
+/* Legacy development builds keep their investigated layout. Portable builds
+   include a complete, explicit profile generated from the checked JSON. */
+#ifndef OPC_CLASSIC_SHA256
 #define OPC_CLASSIC_SHA256 "b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b861243332"
 #define OPC_CALLBACK_RVA 0x00c640f0u
+#define OPC_CLIENT_GLOBAL_RVA 0x3ceacf8u
+#define OPC_CLIENT_VTABLE_RVA 0x35a5680u
+#define OPC_NETWORK_VTABLE_RVA 0x35a5560u
+#define OPC_SOCKET_VTABLE_RVA 0x35a55e0u
+#define OPC_LISTENER_VTABLE_RVA 0x34c19f0u
+#define OPC_LISTENER_ADAPTER_RVA 0x1770e0u
+#define OPC_DAMAGE_DESCRIPTOR_RVA 0x38768b0u
+#define OPC_REQUIRED_IMAGE_SIZE 0x3cead00u
+#endif
 
 typedef struct {
     uint32_t size;

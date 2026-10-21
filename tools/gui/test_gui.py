@@ -9,6 +9,7 @@ import unittest
 import os
 
 from tools.gui.backend import Backend, RuntimeController, saved_snapshot
+from tools.gui.control import command_error_message, preparation_error
 from tools.gui.settings import Settings
 from tools.gui.viewmodel import actor_rows, attack_rows, source_rows, status_view, clipboard_summary
 from tools.gui.viewmodel import display_elapsed, elapsed_label
@@ -19,7 +20,54 @@ FIXTURE = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic
 HOST = Path(__file__).resolve().parents[1] / 'native_capture/bin/AutoRuntimeTestHost.exe'
 
 
+class ControlErrorTests(unittest.TestCase):
+    def test_initial_guard_denial_is_visible_without_an_identity_journal(self):
+        snapshot = {'state':'waiting_for_publication', 'worker_verified':False, 'heartbeat_fresh':False,
+                    'runtime_heartbeat_fresh':True,'runtime_worker_probe':{'alive':True},
+                    'runtime':{'state':'identity_context_error','identity_context_error':5,
+                               'guard_error':5,'guard_stage':3,'callbacks_total':0}}
+        self.assertIn('Win32=5', preparation_error(snapshot))
+        self.assertIn('スレッドの一時停止', preparation_error(snapshot))
+        self.assertEqual(status_view(snapshot)[0], '識別情報の取得エラー')
+        self.assertEqual(status_view(snapshot, saved=True)[0], '保存ログ')
+        self.assertFalse(snapshot['worker_verified'])  # Display never relaxes verification.
+
+    def test_startup_file_failure_does_not_invent_a_thread_failure_and_waiting_stays_waiting(self):
+        snapshot = {'heartbeat_fresh':True,'runtime':{'identity_context_error':5,'guard_error':0,'guard_stage':3}}
+        self.assertNotIn('スレッド', preparation_error(snapshot))
+        self.assertIsNone(preparation_error({'runtime':{'identity_context_error':0}}))
+        self.assertIsNone(preparation_error({'state':'waiting_for_runtime'}))
+
+    def test_old_startup_error_is_not_displayed_as_current_after_dll_installation(self):
+        snapshot = {'state':'waiting_for_publication','runtime_heartbeat_fresh':False,
+                    'runtime':{'identity_context_error':5,'guard_error':5,'guard_stage':3}}
+        self.assertIsNone(preparation_error(snapshot))
+        self.assertNotEqual(status_view(snapshot)[0], '識別情報の取得エラー')
+        self.assertIsNone(preparation_error({**snapshot,'runtime_heartbeat_fresh':True,
+                                           'runtime_worker_probe':{'alive':False}}))
+
+    def test_guard_denial_names_actual_stage_without_mislabeling_file_or_stop_errors(self):
+        state = {'last_command':'start', 'last_command_error':5, 'binding_error':5,
+                 'guard_error':5, 'guard_stage':3}
+        self.assertIn('スレッドの一時停止', command_error_message(state))
+        self.assertIn('Win32=5', command_error_message(state))
+        self.assertNotIn('スレッド', command_error_message({**state, 'last_command':'stop'}))
+        self.assertNotIn('スレッド', command_error_message({**state, 'guard_error':0}))
+        self.assertNotIn('スレッド', command_error_message({'last_command_error':5}))
+
+
 class TimingModeTests(unittest.TestCase):
+    def test_excluded_burn_not_reintroduced_by_either_dps_mode(self):
+        report = {'counts': {'positive_sum': 1300},
+            'damage_totals': {'positive_sum': 300, 'excluded_positive_sum': 1000},
+            'timing': {'definition': QUEST_DEFINITION, 'elapsed_seconds': 9},
+            'encounters': [{'first_qpc': 0, 'last_qpc': 1000, 'qpc_frequency': 1000}],
+            'roles': {'self': {'damage_dealt': 300}}}
+        self.assertAlmostEqual(with_dps_mode(report, 'quest')['timing']['dps'], 300 / 9)
+        self.assertEqual(with_dps_mode(report, 'damage')['timing']['dps'], 300)
+        reopened = json.loads(json.dumps(with_dps_mode(report, 'damage')))
+        self.assertAlmostEqual(with_dps_mode(reopened, 'quest')['timing']['dps'], 300 / 9)
+
     def test_switch_recalculates_all_totals_and_preserves_both_definitions_on_export(self):
         report = {'counts': {'positive_sum': 600},
             'timing': {'definition': QUEST_DEFINITION, 'elapsed_seconds': 100.999, 'spans': [{'end_qpc': 100999}]},
@@ -176,7 +224,7 @@ class WindowTests(unittest.TestCase):
                 self.assertEqual(len(detail.sources.get_children()), 2)
                 app._clear_notice()
                 self.assertEqual([button.cget('text') for button in app.menu_holder.winfo_children()],
-                                 ['計測', 'DPS', '解析', '表示', 'ログ'])
+                     ['計測', 'DPS', '解析', '設定', '表示', 'ログ'])
                 continuous = display_elapsed(app.report)
                 app.dps_menu.invoke(1)
                 self.assertEqual(app.settings.dps_mode, 'damage')

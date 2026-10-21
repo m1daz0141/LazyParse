@@ -5,8 +5,6 @@ import hashlib
 import os
 from pathlib import Path
 import queue
-import shutil
-import subprocess
 import threading
 import time
 import uuid
@@ -15,9 +13,46 @@ from ..combat_core.live import RuntimeMonitor
 from ..combat_core.__main__ import replay
 from ..combat_core.quest_replay import replay_quests
 from ..attack_catalog.catalog import with_attack_names
+from ..combat_core.quest_catalog import quest_label
+from .text_export import AutoTextExporter, save_text
+from .control import RuntimeController
+from ..paths import MANIFEST
+from ..portable.deployment import GameVersionMismatch
 
-NATIVE = Path(__file__).resolve().parents[1] / 'native_capture'
-DEFAULT_MANIFEST = NATIVE / 'bin/autostart-build.json'
+DEFAULT_MANIFEST = MANIFEST
+
+
+def history_key(report, fallback=None):
+    info = (report or {}).get('quest_measurement') or {}
+    if info.get('kind') == 'quest' and all(k in info for k in
+            ('capture_id', 'world_candidate', 'quest_candidate', 'start_qpc')):
+        # Inserting an after-clear interval changes the old ordinal-based ID.
+        # Match the actual attempt instead, without rewriting old archives.
+        return ('quest', info['capture_id'], info['world_candidate'], info['quest_candidate'], info['start_qpc'])
+    return ('interval', info['id']) if info.get('id') else ('file', str(fallback))
+
+
+def stored_history(directory):
+    """Latest immutable JSON revision per quest, including previous GUI runs."""
+    latest = {}
+    if directory is None:
+        return []
+    for path in Path(directory).glob('*.json'):
+        try:
+            report = saved_snapshot(path)['measurement']['report']
+            info = report.get('quest_measurement') or {}
+            key = history_key(report, path)
+            rank = (info.get('rule_version', 0), bool(info.get('stream_finalized')), report.get('counts', {}).get('records', 0),
+                    info.get('result_qpc') or 0, path.stat().st_mtime_ns)
+            entry = {'run_name': quest_label(report) + (f" #{info['number']}" if info.get('number') else ''),
+                'segment_number': '自動' if info else '手動', 'capture_path': str(path),
+                'complete': True, 'roles': report.get('roles', {}), 'report': report,
+                'display_state': '保存済み', 'history_key': key}
+            if key not in latest or rank > latest[key][0]:
+                latest[key] = (rank, entry)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+    return [value[1] for value in sorted(latest.values(), key=lambda value: value[0][-1], reverse=True)]
 
 
 def saved_snapshot(capture, *, auto_quests=False):
@@ -45,31 +80,15 @@ def saved_snapshot(capture, *, auto_quests=False):
         'quest_view': quest_view}
 
 
-class RuntimeController:
-    def __init__(self, expected_process='pso2'):
-        self.expected_process = expected_process
-
-    def invoke(self, snapshot, action):
-        if not snapshot.get('worker_verified') or not snapshot.get('heartbeat_fresh') or snapshot.get('state') == 'shutdown':
-            raise ValueError('取得ワーカーを確認できません。最新の状態を確認してください。')
-        shell = shutil.which('pwsh')
-        if shell is None:
-            raise ValueError('取得制御に必要なPowerShell 7が見つかりません。')
-        args = [shell, '-NoProfile', '-NonInteractive', '-File', str(NATIVE / 'runtime_client.ps1'),
-                '-Action', action, '-Root', snapshot['root'], '-ExpectedProcessName', self.expected_process,
-                '-ExpectedRunName', snapshot['run_name']]
-        result = subprocess.run(args, capture_output=True, encoding='utf-8', errors='replace', timeout=20,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        if result.returncode:
-            raise ValueError((result.stderr or result.stdout).strip())
-        return result.stdout.strip()
-
-
 class Backend:
     def __init__(self, manifest=DEFAULT_MANIFEST, *, root=None, interval=0.5, log_directory=None,
-                 monitor=None, controller=None):
+                 monitor=None, controller=None, deployment=None):
         self.monitor = monitor if monitor is not None else RuntimeMonitor(root=root) if root is not None else RuntimeMonitor(manifest=manifest)
         self.controller = controller or RuntimeController()
+        self.deployment = deployment
+        self.game_directory = None
+        self.game_version_error = None
+        self.next_game_check = 0
         self.interval = interval
         self.log_directory = log_directory
         self.updates = queue.Queue(maxsize=1)
@@ -79,6 +98,9 @@ class Backend:
         self.thread = None
         self.auto_quests = True
         self.auto_error = None
+        self.text_exporter = AutoTextExporter()
+        self.text_options = (False, 'quest', False, True)
+        self.text_error = None
 
     def _auto_archive(self, report):
         if self.log_directory is None:
@@ -104,6 +126,58 @@ class Backend:
         return str(path)
 
     def _poll(self):
+        self._watch_game()
+        snapshot = self._poll_view()
+        snapshot['game_version_error'] = self.game_version_error
+        enabled, mode, anonymize, decimals = self.text_options
+        entries = {}
+        if self.auto_quests:
+            reports = [e['report'] for e in snapshot.get('quest_history', [])]
+            current = (snapshot.get('quest_view') or {}).get('current')
+            if current:
+                reports.append(current)
+            for report in reports:
+                info = report.get('quest_measurement') or {}
+                if info.get('kind') == 'quest':
+                    entries['quest:' + info['id']] = (report, info.get('end_qpc') is not None)
+        else:
+            for entry in snapshot.get('history', []):
+                if entry.get('report'):
+                    entries['capture:' + entry['capture_path']] = (entry['report'], entry.get('complete', False))
+            measurement = snapshot.get('capture_measurement') or snapshot.get('measurement')
+            if measurement:
+                entries['capture:' + measurement['capture_path']] = (measurement['report'], measurement.get('complete', False))
+        try:
+            paths = self.text_exporter.update(entries, enabled=enabled, dps_mode=mode,
+                anonymize=anonymize, time_decimals=decimals)
+            if paths:
+                self.events.put({'type': 'success', 'message': 'TXTを自動出力しました: ' + str(paths[-1])})
+            self.text_error = None
+        except (OSError, ValueError) as error:
+            message = 'TXT自動出力に失敗しました（元データは保持）: ' + str(error)
+            if message != self.text_error:
+                self.events.put({'type': 'error', 'message': message})
+            self.text_error = message
+        snapshot['text_export_error'] = self.text_error
+        return snapshot
+
+    def _watch_game(self, *, force=False):
+        if self.deployment is None or not self.game_directory:
+            return
+        now = time.monotonic()
+        if not force and now < self.next_game_check:
+            return
+        self.next_game_check = now + 5
+        try:
+            self.deployment.verify_game(self.game_directory, force=force)
+            self.game_version_error = None
+        except (OSError, ValueError) as error:
+            message = str(error)
+            if message != self.game_version_error:
+                self.events.put({'type': 'game_version_error', 'message': message})
+            self.game_version_error = message
+
+    def _poll_view(self):
         snapshot = self.monitor.poll()
         if not self.auto_quests:
             return snapshot
@@ -128,7 +202,7 @@ class Backend:
                 path = None  # Keep the verified in-memory report available.
             info = report['quest_measurement']
             history.append({'report_path': path, 'report': report, 'label':
-                ('クエスト' if info['kind'] == 'quest' else 'クエスト外') + f" #{info['number']}",
+                (quest_label(report) if info['kind'] == 'quest' else 'クエスト外') + f" #{info['number']}",
                 'end_reason': info['end_reason'], 'complete': info['stream_finalized']})
         snapshot['quest_history'] = history
         if not failed and self.auto_error and reports:
@@ -176,6 +250,47 @@ class Backend:
         return path
 
     def _execute(self, action, requested, path):
+        if action in {'InstallLoader', 'RemoveLoader', 'CheckLoader'}:
+            if self.deployment is None:
+                raise ValueError('配置用の取得DLLを準備できていません。再ビルドしてください。')
+            if action == 'InstallLoader':
+                folder = self.deployment.install(path)
+                self.game_directory = folder
+                self.game_version_error = None
+                self.events.put({'type': 'loader_installed', 'folder': folder, 'message': '取得DLLの配置を完了しました。通常のランチャーからPSO2を起動できます。'})
+            elif action == 'CheckLoader':
+                self.game_directory = path
+                try:
+                    self.deployment.verify_game(path)
+                    self.game_version_error = None
+                    if self.deployment.needs_reselection():
+                        self.events.put({'type': 'loader_reselect', 'message':
+                            'LazyParseの更新を検出しました。PSO2を終了した状態でDLL配置先を選択してください。'})
+                        return
+                    self.deployment.check(path)
+                    self.game_version_error = None
+                except GameVersionMismatch as error:
+                    if self.game_version_error != str(error):
+                        self.events.put({'type': 'game_version_error', 'message': str(error)})
+                    self.game_version_error = str(error)
+                except (OSError, ValueError) as error:
+                    self.events.put({'type': 'loader_missing', 'message': str(error)})
+            else:
+                self.deployment.remove()
+                self.game_directory = None
+                self.game_version_error = None
+                self.events.put({'type': 'success', 'message': '追加した取得DLLを撤去しました。'})
+            return
+        if action == 'ExportText':
+            report = ((requested or {}).get('measurement') or {}).get('report')
+            if report is None and (requested or {}).get('export_source'):
+                report = saved_snapshot(requested['export_source'])['measurement']['report']
+            if not report:
+                raise ValueError('保存する集計がありません。')
+            _, mode, anonymize, decimals = self.text_options
+            exported = save_text(report, path=path, dps_mode=mode, anonymize=anonymize, time_decimals=decimals)
+            self.events.put({'type': 'success', 'message': 'TXTを保存しました: ' + str(exported)})
+            return
         if action in {'AutoOn', 'AutoOff'}:
             self.auto_quests = action == 'AutoOn'
             self.events.put({'type': 'success', 'message': 'クエスト自動計測（試験中）を' +
@@ -184,6 +299,14 @@ class Backend:
         if action == 'Open':
             self.events.put({'type': 'opened', 'snapshot': saved_snapshot(path, auto_quests=self.auto_quests)})
             return
+        if action in {'Start', 'Next', 'Reset'}:
+            if self.deployment is not None and not self.game_directory:
+                raise ValueError('DLL配置先の確認が完了していません。「設定」からフォルダーを確認してください。')
+            self._watch_game(force=True)
+            if self.game_version_error:
+                raise ValueError(self.game_version_error)
+            if self.deployment is not None and self.deployment.needs_reselection():
+                raise ValueError('このLazyParseのDLL配置先を確認していません。「設定」からフォルダーを再選択してください。')
         current = self._poll()
         if requested is None or (current.get('root'), current.get('run_name')) != (requested.get('root'), requested.get('run_name')):
             raise ValueError('操作前に取得先が変わりました。最新の状態でもう一度操作してください。')
@@ -202,6 +325,9 @@ class Backend:
             else:
                 raise ValueError('記録の保存が完了するまで待機しています。状態を確認してください。')
             archive = self._archive(stopped) if action == 'Next' else None
+            self._watch_game(force=True)
+            if self.game_version_error:
+                raise ValueError(self.game_version_error)
             self.controller.invoke(stopped, 'Start')
             self.events.put({'type': 'success', 'message': '保存して次の計測を開始しました。' if archive else '新しい計測を開始しました。',
                              'archive': str(archive) if archive else None})
@@ -219,8 +345,9 @@ class Backend:
             else:
                 try:
                     self._execute(action, snapshot, path)
-                except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
-                    self.events.put({'type': 'error', 'message': str(error)})
+                except (OSError, ValueError, KeyError) as error:
+                    self.events.put({'type': 'error', 'message': str(error),
+                                     'loader_action': action in {'InstallLoader', 'RemoveLoader', 'CheckLoader'}})
             try:
                 self._publish(self._poll())
             except Exception as error:

@@ -1,0 +1,5 @@
+vendor/
+bin/
+captures/
+.zig-cache/
+__pycache__/

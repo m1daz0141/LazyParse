@@ -9,9 +9,10 @@ import json
 from pathlib import Path
 import re
 from types import MappingProxyType
+from ..paths import CONFIG
 
 DATA = Path(__file__).resolve().parent / 'data'
-EDITABLE_CSV = DATA.parent / 'skills.csv'
+EDITABLE_CSV = CONFIG / 'skills.csv'
 KINDS = frozenset({'Melee', 'Ranged', 'Tech', 'PA', 'Special', 'Status', 'Damage', 'AISV', 'Unknown'})
 
 

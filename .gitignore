@@ -41,3 +41,14 @@ HANDOFF.md
 /tools/binary_analysis/README.md
 /tools/combat_core/README.md
 /tools/gui/README.md
+
+# Local portable settings, captures, builds and catalog investigations.
+/config/
+/logs/
+/Logs/
+/logs_*/
+/dist/
+/.venv-build/
+/Quest.csv
+/QuestNames.csv
+/QuestCatalog.csv

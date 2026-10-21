@@ -7,6 +7,7 @@ import math
 from .model import IdentityRegistry
 from .hit_flags import read_ja_exclusions
 from .hit_rates import HitRates, classify_hit, rate_policy
+from .damage_policy import BURN_ATTACK_IDS, SOURCE_ZERO_BURN, exclusion_reason
 from ..attack_catalog.catalog import get_catalog, with_attack_names
 
 
@@ -17,10 +18,14 @@ class Totals:
     damage_taken: int = 0
     hits_taken: int = 0
     max_hit: int = 0
+    min_hit: int | None = None
     hit_rates: HitRates = field(default_factory=HitRates)
 
-    def as_dict(self, elapsed):
-        return {**vars(self), "hit_rates": self.hit_rates.as_dict(),
+    def as_dict(self, elapsed, *, include_min=False):
+        values = dict(vars(self))
+        if not include_min:
+            values.pop('min_hit')
+        return {**values, "hit_rates": self.hit_rates.as_dict(),
                 "dps": self.damage_dealt / elapsed if elapsed else None}
 
 
@@ -76,11 +81,14 @@ class CombatEngine:
         self.quality_by_capture = {}
         self.sequence_gaps = []
         self.negative_groups = {}
+        self.excluded_groups = {}
         self.measurement_spans = []
         self.measurement_span = None
         self.measurement_now = None
         self.measurement_frequency = None
         self.measurement_finished = False
+        self.first_event_filetime = None
+        self.last_event_filetime = None
         self.ja_ignored_ids, self.ja_ignore_metadata = read_ja_exclusions()
 
     def begin_segment(self, capture_id, registry=None, quality_flags=(), *, first_sequence=1):
@@ -173,6 +181,9 @@ class CombatEngine:
         # timestamp. Preserve record ordering, while allowing delayed delivery.
         self.advance_clock(max(event.qpc, self.clock_qpc or 0), event.frequency)
         self.last_event = event
+        if self.first_event_filetime is None:
+            self.first_event_filetime = event.filetime
+        self.last_event_filetime = event.filetime
         self.counts["records"] += 1
         for ref in (event.receiver, event.source, event.target):
             self.registry.versions.setdefault(ref, 0)
@@ -183,17 +194,22 @@ class CombatEngine:
         hit_flags = classify_hit({'packet_hex': event.packet_hex, 'source': source,
                                  'attack_id': event.attack_id, 'signed_value': event.value}, self.ja_ignored_ids)
         direction = self.direction(credit, target, event.source == event.target)
+        excluded = exclusion_reason(event)
+        included = excluded is None
         if not event.source.object_id or not event.attack_id:
             self.quality_flags.add("zero_source_or_attack_id")
             self.quality_by_capture[self.capture_id].add("zero_source_or_attack_id")
         if event.value > 0:
+            # Packet counts remain a complete audit of all signed records.
+            self.counts['positive_records'] += 1
+            self.counts['positive_sum'] += event.value
+        if included:
             if credit['kind'] == 'player' and self.measurement_span is None:
                 self.measurement_span = {'capture_id': self.capture_id, 'first_damage_qpc': event.qpc,
+                    'first_damage_filetime': event.filetime,
                     'end_qpc': self.measurement_now, 'qpc_frequency': event.frequency,
                     'end_evidence': 'latest_observed_qpc'}
                 self.measurement_spans.append(self.measurement_span)
-            self.counts["positive_records"] += 1
-            self.counts["positive_sum"] += event.value
             self.directions[direction] += event.value
             if self.current is None:
                 self.current = Encounter(len(self.encounters) + 1, self.capture_id, event.qpc, event.qpc,
@@ -214,8 +230,16 @@ class CombatEngine:
             attack.damage_dealt += event.value
             attack.hits_dealt += 1
             attack.max_hit = max(attack.max_hit, event.value)
+            attack.min_hit = min(attack.min_hit, event.value) if attack.min_hit is not None else event.value
             attack.hit_rates.add_hit(hit_flags)
             self.raw_sources[(self.capture_id, self.registry.actor_key(event.source), self.registry.actor_key(credit_ref), event.attack_id)] += event.value
+        elif event.value > 0:
+            self.counts['excluded_positive_records'] += 1
+            self.counts['excluded_positive_sum'] += event.value
+            key = (self.capture_id, event.attack_id, excluded)
+            group = self.excluded_groups.setdefault(key, {'records': 0, 'positive_sum': 0})
+            group['records'] += 1
+            group['positive_sum'] += event.value
         elif event.value < 0:
             self.counts["negative_records"] += 1
             self.counts["negative_sum"] += event.value
@@ -231,8 +255,8 @@ class CombatEngine:
                 "credited_source": credit, "ownership_applied": credit_ref != event.source,
                 "attack_id": event.attack_id, **get_catalog().labels(event.attack_id), "signed_value": event.value,
                 "value_kind": "positive_damage" if event.value > 0 else "healing_candidate" if event.value < 0 else "zero",
-                "included_in_damage": event.value > 0,
-                "exclusion_reason": "non_positive_value" if event.value <= 0 else None,
+                "included_in_damage": included,
+                "exclusion_reason": excluded,
                 "direction": direction if event.value > 0 else "not_classified_as_damage",
                 "packet_hex": event.packet_hex, "hit_flags": hit_flags}
 
@@ -265,16 +289,29 @@ class CombatEngine:
             actors.append({"capture_id": key[0], **info, **totals.as_dict(elapsed)})
         counts = {name: self.counts[name] for name in ("records", "positive_records", "positive_sum",
                   "negative_records", "negative_sum", "zero_records")}
+        selected = {'positive_records': counts['positive_records'] - self.counts['excluded_positive_records'],
+                    'positive_sum': counts['positive_sum'] - self.counts['excluded_positive_sum'],
+                    'excluded_positive_records': self.counts['excluded_positive_records'],
+                    'excluded_positive_sum': self.counts['excluded_positive_sum'],
+                    'excluded_groups': [{'capture_id': capture, 'attack_id': attack,
+                        'reason': reason, **value} for (capture, attack, reason), value in sorted(self.excluded_groups.items())]}
         return with_attack_names({"schema_version": 1, "counts": counts,
+                "recording_time": {"first_event_filetime": self.first_event_filetime,
+                                   "last_event_filetime": self.last_event_filetime},
+                "damage_totals": selected,
                 "hit_rate_policy": rate_policy(self.ja_ignore_metadata),
                 "aggregation_policy": {"non_positive_values": "excluded_before_aggregation",
                     "negative_value_classification": "healing_candidate", "raw_signed_values_preserved": True,
-                    "zero_attack_positive_values": "included_with_quality_flag"},
+                    "zero_attack_positive_values": "included_with_quality_flag",
+                    "source_zero_burn": "excluded_before_aggregation",
+                    "source_zero_burn_ids": sorted(BURN_ATTACK_IDS),
+                    "source_zero_burn_exclusion_reason": SOURCE_ZERO_BURN,
+                    "counts": "all_raw_signed_records"},
                 "identity_state": {"self": self.registry.describe(self.registry.self_ref) if self.registry.self_ref else None,
                     "scene": self.registry.scene,
                     "entities": [self.registry.describe(ref) for ref in sorted(self.registry.entries)]},
                 "timing": {"idle_timeout_seconds": float(self.idle_seconds),
-                    "elapsed_seconds": elapsed, "dps": counts["positive_sum"] / elapsed if elapsed else None,
+                    "elapsed_seconds": elapsed, "dps": selected["positive_sum"] / elapsed if elapsed else None,
                     "definition": "continuous_from_first_player_damage_including_idle_and_map_time",
                     "spans": [dict(span) for span in self.measurement_spans],
                     "quest_end_detection": "not_yet_available_use_manual_stop",
@@ -282,7 +319,7 @@ class CombatEngine:
                 "roles": {key: value.as_dict(elapsed) for key, value in sorted(role_totals.items())},
                 "actors": actors,
                 "attacks": [{"capture_id": capture, "credited_source_key": source, "attack_id": attack,
-                             **value.as_dict(elapsed)} for (capture, source, attack), value in sorted(self.attack_totals.items())],
+                             **value.as_dict(elapsed, include_min=True)} for (capture, source, attack), value in sorted(self.attack_totals.items())],
                 "raw_source_damage": [{"capture_id": capture, "source_key": source, "credited_source_key": credit,
                     "attack_id": attack, "damage": damage} for (capture, source, credit, attack), damage in sorted(self.raw_sources.items())],
                 "negative_values": [{"capture_id": capture, "source_key": source, "target_key": target,

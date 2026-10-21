@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 from .metadata import IdentityEvent
-from .quests import QuestSession, SUPPORTED_CLASSIC
+from .quests import QuestSession, SUPPORTED_CLASSIC, SUPPORTED_CLASSICS
 from .quest_replay import replay_quests
 from .live import RuntimeMonitor
 from .test_combat_core import SELF, ENEMY, packet, identity_packet, events
@@ -29,6 +29,22 @@ def level(sequence, qpc, world, quest=475):
     return IdentityEvent(sequence, 0, qpc * 10000, qpc, 1000, 2656, bytes(data))
 
 
+def transfer(sequence, qpc):
+    data = bytearray(84)
+    struct.pack_into('<I4B', data, 0, 84, 0, 3, 0, 0)
+    for offset, object_id, kind in [(8, 55, 5), (20, SELF.object_id, 4)]:
+        struct.pack_into('<IIHH', data, offset, object_id, 0, kind, 0)
+    return IdentityEvent(sequence, 0, qpc * 10000, qpc, 1000, 84, bytes(data))
+
+
+def campship_exit(sequence, qpc, name=b'oa_campship_exit'):
+    data = bytearray(128)
+    struct.pack_into('<I4B', data, 0, 168, 0, 8, 0xb, 0)
+    struct.pack_into('<IIHH', data, 8, 3, 0, 6, 17)
+    data[0x24:0x24 + len(name)] = name
+    return IdentityEvent(sequence, 0, qpc * 10000, qpc, 1000, 168, bytes(data))
+
+
 def fixture():
     identities = []
     for major, minor, ref in [(6, 0, SELF), (8, 0xd, ENEMY)]:
@@ -47,6 +63,27 @@ def fixture():
 class QuestTests(unittest.TestCase):
     def session(self, start=20, source=SUPPORTED_CLASSIC):
         return QuestSession('fixture', start, 1000, source)
+
+    def test_maintenance_profile_preserves_boundaries_totals_and_rejects_unknown_build(self):
+        identities, damage = fixture()
+        expected = None
+        for source in sorted(SUPPORTED_CLASSICS):
+            with self.subTest(source=source):
+                session = self.session(source=source)
+                session.update(identities, damage, 3500, end_qpc=3500)
+                view = session.view()
+                self.assertFalse(view['suspended'])
+                quests = [r for r in view['history'] if r['quest_measurement']['kind'] == 'quest']
+                actual = [(r['roles']['self']['damage_dealt'], r['timing']['elapsed_seconds'],
+                           r['quest_measurement']['end_reason']) for r in quests]
+                self.assertEqual(len(actual), 2)
+                if expected is None:
+                    expected = actual
+                self.assertEqual(actual, expected)
+        unsupported = self.session(source='b434e9e2' + '0' * 56)
+        unsupported.update(identities, damage, 3500, end_qpc=3500)
+        self.assertEqual(unsupported.view()['outside_records'], len(damage))
+        self.assertIsNone(unsupported.view()['current'])
 
     def test_same_quest_repeat_clear_clock_roundtrip_duplicate_and_outside_retention(self):
         identities, damage = fixture()
@@ -171,6 +208,152 @@ class QuestTests(unittest.TestCase):
         session.update(identities[:7] + [level(8, 1500, 17)], damage[:4], 1800)
         self.assertEqual(len([b for b in session.buckets if b.kind == 'quest']), 1)
 
+    def test_failure_return_freezes_only_on_return_and_retry_starts_a_new_clock(self):
+        identities = fixture()[0][:2] + [level(3, 100, 17, 1132),
+            notice(4, 500, 0xb, 0x13, 52)]  # Incapacitation is not a terminal notice.
+        damage = events([(1, 200, packet(value=100)), (2, 450, packet(ENEMY, SELF, 10))])
+        session = self.session()
+        session.update(identities, damage, 700)
+        current = session.view()['current']
+        self.assertIsNone(current['quest_measurement']['end_qpc'])
+        self.assertAlmostEqual(current['timing']['elapsed_seconds'], .5)
+        identities += [notice(5, 800, 0xb, 0x21, 12)]
+        session.update(identities, [], 800)
+        self.assertIsNone(session.view()['current']['quest_measurement']['end_qpc'])
+        identities += [notice(6, 801, 0xb, 0x27, 120), level(7, 1000, 17, 1132)]
+        session.update(identities, [], 1200)
+        first = session.view()['current']
+        self.assertEqual(first['quest_measurement']['end_reason'], 'failure_return_candidate')
+        self.assertEqual(first['quest_measurement']['failure_return_pair_sequences'], [5, 6])
+        self.assertEqual(first['quest_measurement']['end_qpc'], 801)
+        self.assertAlmostEqual(first['timing']['elapsed_seconds'], .601)
+        session.update(identities, [], 1500)
+        self.assertEqual(session.view()['current'], first)
+        identities += [level(8, 1800, 18, 1132)]
+        session.update(identities, [], 1800)
+        self.assertEqual(session.view()['current']['counts']['records'], 0)
+        self.assertEqual(session.view()['current']['timing']['elapsed_seconds'], 0)
+        session.update(identities, events([(3, 1100, packet(value=7)),
+            (4, 1900, packet(value=80))]), 2200)
+        view = session.view()
+        self.assertEqual(view['all_records'], 4)
+        self.assertEqual(view['outside_records'], 1)
+        self.assertEqual(view['current']['roles']['self']['damage_dealt'], 80)
+        self.assertAlmostEqual(view['current']['timing']['elapsed_seconds'], .3)
+        self.assertEqual(view['history'][0], first)
+
+    def test_failure_return_requires_observed_quest_sizes_adjacency_order_and_time(self):
+        for bad_prefix, bad_suffix, quest in [
+            (notice(4, 800, 0xb, 0x21, 16), notice(5, 801, 0xb, 0x27, 120), 1132),
+            (notice(4, 800, 0xb, 0x21, 12), notice(5, 801, 0xb, 0x27, 124), 1132),
+            (notice(4, 800, 0xb, 0x21, 12), notice(6, 801, 0xb, 0x27, 120), 1132),
+            (notice(4, 800, 0xb, 0x21, 12), notice(5, 900, 0xb, 0x27, 120), 1132),
+            (notice(4, 800, 0xb, 0x27, 120), notice(5, 801, 0xb, 0x21, 12), 1132),
+            (notice(4, 800, 0xb, 0x21, 12), notice(5, 801, 0xb, 0x27, 120), 475),
+        ]:
+            with self.subTest(prefix=bad_prefix, suffix=bad_suffix, quest=quest):
+                session = self.session()
+                identities = fixture()[0][:2] + [level(3, 100, 17, quest), bad_prefix, bad_suffix]
+                session.update(identities, events([(1, 200, packet(value=100))]), 1200)
+                self.assertIsNone(session.view()['current']['quest_measurement']['end_qpc'])
+
+    def test_start_after_failure_return_keeps_same_world_outside_until_new_attempt(self):
+        identities = fixture()[0][:2] + [level(3, 100, 17, 1132),
+            notice(4, 800, 0xb, 0x21, 12), notice(5, 801, 0xb, 0x27, 120),
+            level(6, 1200, 17, 1132), level(7, 1800, 18, 1132)]
+        session = self.session(start=900)
+        session.update(identities, events([(1, 1300, packet(value=7)),
+            (2, 1900, packet(value=80))]), 2200)
+        self.assertEqual(session.view()['outside_records'], 1)
+        self.assertEqual(session.view()['current']['quest_measurement']['world_candidate'], 18)
+        self.assertEqual(session.view()['current']['roles']['self']['damage_dealt'], 80)
+        # Loading the same world again before record start must not undo the
+        # already observed terminal state when reconstructing the journal.
+        later = self.session(start=1500)
+        later.update(identities, [], 1700)
+        self.assertIsNone(later.view()['current'])
+        later.update(identities, events([(1, 1900, packet(value=80))]), 2200)
+        self.assertEqual(later.view()['current']['roles']['self']['damage_dealt'], 80)
+        # The prefix can precede record start while the return itself follows it.
+        partial = self.session(start=800)
+        partial.update(identities[:5], [], 1000)
+        self.assertEqual(partial.view()['current']['quest_measurement']['end_qpc'], 801)
+
+    def test_failure_return_incremental_and_late_damage_match_direct_replay(self):
+        identities = fixture()[0][:2] + [level(3, 100, 17, 1132),
+            notice(4, 800, 0xb, 0x21, 12), notice(5, 801, 0xb, 0x27, 120),
+            level(6, 1800, 18, 1132)]
+        damage = events([(1, 200, packet(value=100)), (2, 700, packet(value=50)),
+            (3, 1000, packet(value=7)), (4, 1900, packet(value=80))])
+        direct = self.session()
+        direct.update(identities, damage, 2200, end_qpc=2200)
+        staged = self.session()
+        staged.update(identities[:4], damage[:1], 800)
+        staged.update(identities, [], 2200)
+        staged.view()
+        staged.update(identities, damage[1:], 2200, end_qpc=2200)
+        self.assertEqual(staged.view(), direct.view())
+
+    def test_quest1130_campship_return_freezes_and_new_world_restarts(self):
+        identities = fixture()[0][:2] + [level(3, 100, 17, 1130),
+            notice(4, 400, 0xb, 0x13, 52), transfer(5, 500), campship_exit(6, 510)]
+        damage = events([(1, 200, packet(value=100))])
+        session = self.session()
+        session.update(identities, damage, 515)
+        self.assertIsNone(session.view()['current']['quest_measurement']['end_qpc'])
+        identities += [notice(7, 520, 0xb, 0x21, 12), level(8, 800, 17, 1130)]
+        session.update(identities, [], 900)
+        first = session.view()['current']
+        self.assertEqual(first['quest_measurement']['end_reason'], 'failure_return_candidate')
+        self.assertEqual(first['quest_measurement']['campship_return_sequences'], [5, 6, 7])
+        self.assertIsNone(first['quest_measurement']['failure_return_pair_sequences'])
+        self.assertAlmostEqual(first['timing']['elapsed_seconds'], .32)
+        session.update(identities, [], 1200)
+        self.assertEqual(session.view()['current'], first)
+        identities += [level(9, 1500, 18, 1130)]
+        session.update(identities, [], 1500)
+        self.assertEqual(session.view()['current']['counts']['records'], 0)
+        session.update(identities, events([(2, 700, packet(value=7)),
+            (3, 1600, packet(value=80))]), 1800)
+        self.assertEqual(session.view()['outside_records'], 1)
+        self.assertEqual(session.view()['current']['roles']['self']['damage_dealt'], 80)
+
+    def test_quest1130_return_rejects_unrelated_incomplete_or_stale_evidence(self):
+        cases = [
+            (475, [transfer(4, 500), campship_exit(5, 510), notice(6, 520, 0xb, 0x21, 12)]),
+            (1130, [campship_exit(5, 510), notice(6, 520, 0xb, 0x21, 12)]),
+            (1130, [transfer(4, 500), notice(6, 520, 0xb, 0x21, 12)]),
+            (1130, [transfer(4, 500), campship_exit(5, 510, b'oa_other_exit'), notice(6, 520, 0xb, 0x21, 12)]),
+            (1130, [transfer(4, 500), campship_exit(5, 510), notice(6, 1520, 0xb, 0x21, 12)]),
+            (1130, [transfer(4, 500), campship_exit(5, 510), notice(6, 520, 0xb, 0x21, 16)]),
+            (1130, [transfer(4, 500), campship_exit(5, 510), transfer(6, 515), notice(7, 520, 0xb, 0x21, 12)]),
+        ]
+        for quest, tail in cases:
+            with self.subTest(quest=quest, tail=tail):
+                session = self.session()
+                session.update(fixture()[0][:2] + [level(3, 100, 17, quest)] + tail,
+                               events([(1, 200, packet(value=100))]), 2000)
+                self.assertIsNone(session.view()['current']['quest_measurement']['end_qpc'])
+
+    def test_quest1130_return_state_spans_record_start_and_preserves_late_damage(self):
+        identities = fixture()[0][:2] + [level(3, 100, 17, 1130),
+            transfer(4, 500), campship_exit(5, 510), notice(6, 520, 0xb, 0x21, 12),
+            level(7, 800, 17, 1130), level(8, 1500, 18, 1130)]
+        partial = self.session(start=515)
+        partial.update(identities, [], 1000)
+        self.assertEqual(partial.view()['current']['quest_measurement']['end_qpc'], 520)
+        late_start = self.session(start=1000)
+        late_start.update(identities, [], 1200)
+        self.assertIsNone(late_start.view()['current'])
+        damage = events([(1, 200, packet(value=100)), (2, 450, packet(value=50)),
+            (3, 700, packet(value=7)), (4, 1600, packet(value=80))])
+        direct, staged = self.session(), self.session()
+        direct.update(identities, damage, 1800, end_qpc=1800)
+        staged.update(identities[:5], damage[:1], 515)
+        staged.update(identities, [], 1800)
+        staged.update(identities, damage[1:], 1800, end_qpc=1800)
+        self.assertEqual(staged.view(), direct.view())
+
     def test_published_identity_ahead_of_damage_keeps_late_hits_in_the_old_quest(self):
         identities, damage = fixture()
         with tempfile.TemporaryDirectory() as work:
@@ -202,8 +385,10 @@ class QuestTests(unittest.TestCase):
 
 
 LIVE_ROOT = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic-auto-fixture-007'
-CAPTURE = LIVE_ROOT / 'run-100000000000000007-1-0/segment-000001/capture.opcap'
-GAP_CAPTURE = LIVE_ROOT / 'run-100000000000000008-1-0/segment-000001/capture.opcap'
+CAPTURE = LIVE_ROOT / 'run-100000000000000011-1-0/segment-000001/capture.opcap'
+GAP_CAPTURE = LIVE_ROOT / 'run-100000000000000012-1-0/segment-000001/capture.opcap'
+FAILURE_RETURN_CAPTURE = LIVE_ROOT / 'run-100000000000000013-1-0/segment-000001/capture.opcap'
+MULTI_QUEST_CAPTURE = LIVE_ROOT / 'run-100000000000000014-1-0/segment-000001/capture.opcap'
 
 
 class PinnedLiveTest(unittest.TestCase):
@@ -222,6 +407,43 @@ class PinnedLiveTest(unittest.TestCase):
                  'segment_number': int(capture.parent.name[8:]), 'recording': False,
                  'identity_observing': False, 'classic_hash_required': ref['source_sha256']}
         (self.root / 'autostart-state.json').write_text(json.dumps(state), encoding='utf-8')
+
+
+@unittest.skipUnless(FAILURE_RETURN_CAPTURE.exists(), 'private failure-return recording required')
+class FailureReturnLiveRegressionTests(PinnedLiveTest):
+    def test_return_freezes_before_retry_and_preserves_all_records(self):
+        self.pin(FAILURE_RETURN_CAPTURE)
+        result = replay_quests(self.capture)
+        snapshot = RuntimeMonitor(root=self.root).poll()
+        self.assertEqual(snapshot['quest_view'], result['quest_view'])
+        view = result['quest_view']
+        quests = [r for r in view['history'] if r['quest_measurement']['kind'] == 'quest']
+        self.assertEqual(view['all_records'], 592)
+        self.assertEqual(view['outside_records'], 0)
+        first, second = quests
+        self.assertEqual(first['roles']['self']['damage_dealt'], 17170327)
+        self.assertEqual(first['quest_measurement']['end_qpc'], 83983557155)
+        self.assertEqual(first['quest_measurement']['end_reason'], 'failure_return_candidate')
+        self.assertEqual(first['quest_measurement']['failure_return_pair_sequences'], [1478, 1479])
+        self.assertEqual(first['timing']['elapsed_seconds'], 151.1925303)
+        self.assertEqual(second['counts']['records'], 0)
+        self.assertEqual(second['quest_measurement']['world_candidate'], 35675)
+
+
+@unittest.skipUnless(MULTI_QUEST_CAPTURE.exists(), 'private multi-quest return recording required')
+class MultiQuestReturnLiveRegressionTests(PinnedLiveTest):
+    def test_quest1132_live_retest_and_quest1130_return_preserve_every_record(self):
+        self.pin(MULTI_QUEST_CAPTURE)
+        result = replay_quests(self.capture)
+        self.assertEqual(RuntimeMonitor(root=self.root).poll()['quest_view'], result['quest_view'])
+        view = result['quest_view']
+        quests = [r for r in view['history'] if r['quest_measurement']['kind'] == 'quest']
+        self.assertEqual(view['all_records'], 1309)
+        self.assertEqual(view['outside_records'], 0)
+        self.assertEqual([r['roles']['self']['damage_dealt'] for r in quests], [28749187, 9726784, 3198498])
+        self.assertEqual([r['timing']['elapsed_seconds'] for r in quests], [153.7339784, 100.0775758, 131.1808567])
+        self.assertEqual(quests[2]['quest_measurement']['campship_return_sequences'], [1614, 1619, 1630])
+        self.assertEqual(quests[2]['quest_measurement']['end_reason'], 'failure_return_candidate')
 
 
 @unittest.skipUnless(GAP_CAPTURE.exists(), 'private GUI live run with shutdown binding loss required')

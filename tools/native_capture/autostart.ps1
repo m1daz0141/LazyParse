@@ -1,9 +1,10 @@
 param(
     [Parameter(Mandatory)][ValidateSet('Install','Status','Start','Stop','Shutdown','Remove')][string]$Action,
-    [string]$GameBin = (Join-Path ${env:ProgramFiles} 'PHANTASYSTARONLINE2\pso2_bin\sub')
+    [string]$GameBin = (Join-Path ${env:ProgramFiles} 'PHANTASYSTARONLINE2\pso2_bin\sub'),
+    [string]$BuildManifest = (Join-Path $PSScriptRoot 'bin/autostart-build.json')
 )
 $ErrorActionPreference = 'Stop'
-$build = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'bin/autostart-build.json') | ConvertFrom-Json
+$build = Get-Content -Raw -LiteralPath $BuildManifest | ConvertFrom-Json
 $installFile = Join-Path $PSScriptRoot 'captures/autostart-install.json'
 if ($Action -in @('Status','Start','Stop','Shutdown')) {
     & (Join-Path $PSScriptRoot 'runtime_client.ps1') -Action $Action -Root $build.session

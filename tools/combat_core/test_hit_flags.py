@@ -109,7 +109,7 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(report['summary']['ja_eligible_candidate_unset'], 0)
         self.assertEqual(report['roles']['self']['damage_dealt'], 92341)
         self.assertEqual(report['counts']['negative_sum'], -539)
-        self.assertEqual(report['capture_sha256'], '0000000000000000000000000000000000000000000000000000000000000000')
+        self.assertEqual(report['capture_sha256'], '79f87f5cd632c61d6d311df08372bdb29025ae77ebc1a8508ea0fa34d1724ff6')
 
     def test_prior_screenshot_values_have_both_crit_candidate_states(self):
         ignored, _ = read_legacy_ignore()
@@ -144,8 +144,8 @@ class RecordingTests(unittest.TestCase):
 class ControlledHeroTests(unittest.TestCase):
     def test_same_later_combo_ids_clear_and_set_ja_with_unchanged_damage(self):
         ignored, _ = read_legacy_ignore()
-        expected = [(2, False, 859372, '0000000000000000000000000000000000000000000000000000000000000000'),
-                    (3, True, 1102251, '0000000000000000000000000000000000000000000000000000000000000000')]
+        expected = [(2, False, 859372, '2338b31f03c3d8c0804bf9db8e239cd410f45036afd42d4e801f55fa546fc695'),
+                    (3, True, 1102251, 'ae1040da2e688ef3614004126c6eeb2e67075eeaf201698a7ddf7dde155997a1')]
         for number, ja, total, digest in expected:
             with self.subTest(segment=number):
                 path = HERO / f'segment-{number:06d}/capture.opcap'

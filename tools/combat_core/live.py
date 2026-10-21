@@ -268,6 +268,7 @@ class RuntimeMonitor:
         self.history.append({'run_name': run_name, 'segment_number': number,
             'capture_path': str(follower.path), 'complete': follower.complete,
             'counts': summary['counts'], 'roles': summary['roles'], 'error': error,
+            'report': summary,
             'quest_reports': follower.quests.view()['history'] if follower.quests else []})
 
     def _retire_run(self):
@@ -323,8 +324,10 @@ class RuntimeMonitor:
 
     def poll(self):
         self.revision += 1
+        runtime_fresh, runtime_alive, runtime_probe = False, False, None
         try:
             root, run, state, fresh, alive, process, now = self._state()
+            runtime_fresh, runtime_alive, runtime_probe = fresh, alive, process
             key = (str(root), state['run_name'], state['pid'])
             if key != self.key:
                 self._retire_run()
@@ -390,7 +393,9 @@ class RuntimeMonitor:
             self.last = deepcopy(self.last)
             self.last.update(state='waiting_for_publication' if isinstance(error, (PendingData, FileNotFoundError)) else 'read_error',
                              error=str(error), effective_recording=False, worker_verified=False,
-                             heartbeat_fresh=False, worker_probe=None)
+                             heartbeat_fresh=False, worker_probe=None,
+                             runtime_heartbeat_fresh=runtime_fresh, runtime_worker_verified=runtime_alive,
+                             runtime_worker_probe=runtime_probe)
             if self.last.get('identity'):
                 self.last['identity']['is_live'] = False
             if self.last.get('measurement'):

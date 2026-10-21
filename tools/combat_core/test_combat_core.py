@@ -16,6 +16,7 @@ from tools.combat_core import CaptureDecoder, CombatEngine, IdentityRegistry, Ob
 from tools.combat_core.__main__ import follow, replay
 from tools.combat_core.reader import HEADER, RECORD
 from tools.combat_core.metadata import META_RECORD, META_RECORD_V2, read_metadata
+from tools.combat_core.damage_policy import BURN_ATTACK_IDS, SOURCE_ZERO_BURN
 
 SELF = ObjectRef(123, 4)  # Deliberately below the old 10,000,000 threshold.
 OTHER = ObjectRef(456, 4)
@@ -74,6 +75,48 @@ def engine(rows, identities=None):
 
 
 class AttributionTests(unittest.TestCase):
+    def test_source_zero_burn_levels_excluded_but_identified_sources_and_other_attacks_stay(self):
+        rows = []
+        for attack in sorted(BURN_ATTACK_IDS):
+            rows.append((len(rows) + 1, len(rows) * 100, packet(ObjectRef(0, 0), value=1000, attack=attack)))
+            rows.append((len(rows) + 1, len(rows) * 100, packet(SELF, value=10, attack=attack)))
+            rows.append((len(rows) + 1, len(rows) * 100, packet(OTHER, value=20, attack=attack)))
+        rows.append((len(rows) + 1, len(rows) * 100, packet(ObjectRef(0, 0), value=7, attack=99)))
+        e = CombatEngine(); e.begin_segment('fixture', registry())
+        audit = [e.feed(event) for event in events(rows)]
+        report = e.finish()
+        self.assertEqual(report['counts']['records'], 16)
+        self.assertEqual(report['counts']['positive_sum'], 5157)
+        self.assertEqual(report['damage_totals']['positive_sum'], 157)
+        self.assertEqual(report['damage_totals']['excluded_positive_records'], 5)
+        self.assertEqual(report['damage_totals']['excluded_positive_sum'], 5000)
+        self.assertEqual(report['roles']['self']['damage_dealt'], 50)
+        self.assertEqual(report['roles']['other_player']['damage_dealt'], 100)
+        self.assertEqual(report['roles']['unknown']['damage_dealt'], 7)
+        self.assertEqual(sum(a['damage_dealt'] for a in report['attacks']), 157)
+        excluded = [event for event in audit if event['exclusion_reason'] == SOURCE_ZERO_BURN]
+        self.assertEqual(len(excluded), 5)
+        self.assertTrue(all(not event['included_in_damage'] for event in excluded))
+        self.assertTrue(all(event['packet_hex'] == rows[event['sequence'] - 1][2].hex() for event in audit))
+        self.assertFalse(report['quality']['sequence_gaps'])
+
+    def test_source_zero_burn_does_not_create_or_extend_damage_encounters(self):
+        burn = min(BURN_ATTACK_IDS)
+        only = engine([(1, 0, packet(ObjectRef(0, 6, 8), SELF, 1000, burn))], registry()).finish()
+        self.assertFalse(only['actors'])
+        self.assertFalse(only['attacks'])
+        self.assertFalse(only['encounters'])
+        self.assertFalse(only['timing']['spans'])
+        self.assertIsNone(only['timing']['dps'])
+        result = engine([(1, 0, packet(value=100)), (2, 1000, packet(value=200)),
+            (3, 9000, packet(ObjectRef(0, 0), value=1000, attack=burn))], registry()).finish()
+        self.assertEqual(result['roles']['self']['hits_dealt'], 2)
+        self.assertEqual(result['actors'][0]['max_hit'], 200)
+        self.assertEqual(result['encounters'][0]['elapsed_seconds'], 1)
+        self.assertEqual(result['encounters'][0]['positive_damage'], 300)
+        self.assertEqual(result['damage_by_direction'], {'player_to_enemy': 300})
+        self.assertAlmostEqual(result['timing']['dps'], 300 / 9)
+
     def test_self_other_enemy_incoming_and_self_damage(self):
         result = engine([(1, 1000, packet()), (2, 2000, packet(OTHER, value=200)),
                          (3, 3000, packet(ENEMY, SELF, 30)), (4, 4000, packet(SELF, SELF, 4))], registry()).finish()
@@ -438,9 +481,9 @@ class LiveCaptureRegressionTests(unittest.TestCase):
         run = Path(__file__).resolve().parents[1] / "native_capture/captures/classic-auto-fixture-001/run-100000000000000001-1-0"
         if not run.exists():
             self.skipTest("private Maron capture is not present in this checkout")
-        expected = {'segment-000001/capture.opcap': '0000000000000000000000000000000000000000000000000000000000000000',
-            'segment-000001/identity.opmeta': '0000000000000000000000000000000000000000000000000000000000000000',
-            'identity-context/identity.opmeta': '0000000000000000000000000000000000000000000000000000000000000000'}
+        expected = {'segment-000001/capture.opcap': '79f87f5cd632c61d6d311df08372bdb29025ae77ebc1a8508ea0fa34d1724ff6',
+            'segment-000001/identity.opmeta': '2e6c0b441c24e590f1ea84ef70d7ff4fbe0998505f0b17f59adcd8f1a797aee9',
+            'identity-context/identity.opmeta': '6548c4b1932da09151af3bea09c99c8739090b140b41c26e21e03735435fcdd6'}
         for path, digest in expected.items():
             self.assertEqual(hashlib.sha256((run / path).read_bytes()).hexdigest(), digest)
         capture = run / 'segment-000001/capture.opcap'
@@ -473,10 +516,10 @@ class LiveCaptureRegressionTests(unittest.TestCase):
         run = Path(__file__).resolve().parents[1] / "native_capture/captures/classic-auto-fixture-002/run-100000000000000002-1-0"
         if not run.exists():
             self.skipTest("private initial identity live capture is not present in this checkout")
-        expected = {"identity-context/identity.opmeta": "0000000000000000000000000000000000000000000000000000000000000000",
-            "segment-000001/capture.opcap": "0000000000000000000000000000000000000000000000000000000000000000",
-            "segment-000002/capture.opcap": "0000000000000000000000000000000000000000000000000000000000000000",
-            "segment-000002/identity.opmeta": "0000000000000000000000000000000000000000000000000000000000000000"}
+        expected = {"identity-context/identity.opmeta": "84535e923d9136167d6a3574a691ce36d1dc1d762c0a7c3d8a5a8eca70e8af53",
+            "segment-000001/capture.opcap": "11b278b359314c119c18fd2c2e56150a83c8714e237a6698b2d6fe56bd446e8a",
+            "segment-000002/capture.opcap": "fc60d14448b4d15603d8505dc5539ddde562e99056fd2f788965692adcef1383",
+            "segment-000002/identity.opmeta": "665dd13252f9b69585665eb90a815d54874d569949774ea929659ba4e111e4b3"}
         for path, digest in expected.items():
             self.assertEqual(hashlib.sha256((run / path).read_bytes()).hexdigest(), digest)
         initial = replay(run / "segment-000001/capture.opcap")
@@ -509,8 +552,8 @@ class LiveCaptureRegressionTests(unittest.TestCase):
         capture = Path(__file__).resolve().parents[1] / "native_capture/captures/classic-auto-fixture-003/run-100000000000000003-1-0/segment-000001/capture.opcap"
         if not capture.exists():
             self.skipTest("private identity live capture is not present in this checkout")
-        expected_hashes = [(capture, "0000000000000000000000000000000000000000000000000000000000000000"),
-            (capture.with_name("identity.opmeta"), "0000000000000000000000000000000000000000000000000000000000000000")]
+        expected_hashes = [(capture, "e7100fd20d74feddd1bdd63af894d359db8e688d7c2465a1278d4655716a4c87"),
+            (capture.with_name("identity.opmeta"), "59f9d5d1e528a19d0820fb2c3e5178dba7315fd185bf61941ecb7a390f1e33ca")]
         for path, digest in expected_hashes:
             self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
         report = replay(capture)  # No manual self ID or entity annotations.
@@ -536,9 +579,9 @@ class LiveCaptureRegressionTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1] / "native_capture" / "captures"
         fixtures = [
             (root / "classic-auto-fixture-004" / "capture.opcap", 17, 6, 11, 257770,
-             "0000000000000000000000000000000000000000000000000000000000000000"),
+             "4c2e8d27b7a74ad31cae72693e9007d3d9656bb2e21e6fdd116d93c2184cb3d3"),
             (root / "classic-auto-fixture-005" / "run-100000000000000004-1-0" / "segment-000002" / "capture.opcap",
-             28, 15, 13, 272366, "0000000000000000000000000000000000000000000000000000000000000000")]
+             28, 15, 13, 272366, "3dd5db76bdfd92061ab15fbf789f97d9217e3e14f7488bc094b6f0b4b790535f")]
         if not all(path.exists() for path, *_ in fixtures):
             self.skipTest("private live captures are not present in this checkout")
         for path, count, positives, negatives, total, digest in fixtures:

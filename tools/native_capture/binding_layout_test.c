@@ -7,25 +7,26 @@ static int expect(DWORD actual, DWORD expected, const char *name) {
 }
 
 int main(void) {
-    unsigned char *base = VirtualAlloc(NULL, 0x3ceb000, MEM_RESERVE, PAGE_NOACCESS);
+    SIZE_T image_size = (OPC_REQUIRED_IMAGE_SIZE + 0xffffu) & ~(SIZE_T)0xffffu;
+    unsigned char *base = VirtualAlloc(NULL, image_size, MEM_RESERVE, PAGE_NOACCESS);
     unsigned char *client = VirtualAlloc(NULL, 0x2000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     unsigned char *network = VirtualAlloc(NULL, 0x11000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     uintptr_t *listener = VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!base || !client || !network || !listener ||
-        !VirtualAlloc(base + 0x3cea000, 4096, MEM_COMMIT, PAGE_READWRITE) ||
-        !VirtualAlloc(base + 0x34c1000, 4096, MEM_COMMIT, PAGE_READWRITE)) return 1;
-    *(uintptr_t *)(base + 0x3ceacf8) = (uintptr_t)client;
-    *(uintptr_t *)client = (uintptr_t)base + 0x35a5680;
+        !VirtualAlloc(base + (OPC_CLIENT_GLOBAL_RVA & ~0xfffu), 4096, MEM_COMMIT, PAGE_READWRITE) ||
+        !VirtualAlloc(base + (OPC_LISTENER_VTABLE_RVA & ~0xfffu), 4096, MEM_COMMIT, PAGE_READWRITE)) return 1;
+    *(uintptr_t *)(base + OPC_CLIENT_GLOBAL_RVA) = (uintptr_t)client;
+    *(uintptr_t *)client = (uintptr_t)base + OPC_CLIENT_VTABLE_RVA;
     *(uintptr_t *)(client + 0x1498) = (uintptr_t)network;
-    *(uintptr_t *)network = (uintptr_t)base + 0x35a5560;
-    *(uintptr_t *)(network + 0x48) = (uintptr_t)base + 0x35a55e0;
+    *(uintptr_t *)network = (uintptr_t)base + OPC_NETWORK_VTABLE_RVA;
+    *(uintptr_t *)(network + 0x48) = (uintptr_t)base + OPC_SOCKET_VTABLE_RVA;
     *(uintptr_t *)(network + 0x101d8) = (uintptr_t)listener;
-    listener[0] = (uintptr_t)base + 0x34c19f0;
+    listener[0] = (uintptr_t)base + OPC_LISTENER_VTABLE_RVA;
     listener[1] = 2;
     listener[2] = (uintptr_t)base + OPC_CALLBACK_RVA;
     listener[3] = 0;
     listener[4] = (uintptr_t)client;
-    *(uintptr_t *)(base + 0x34c19f8) = (uintptr_t)base + 0x1770e0;
+    *(uintptr_t *)(base + OPC_LISTENER_VTABLE_RVA + 8) = (uintptr_t)base + OPC_LISTENER_ADAPTER_RVA;
     BindingSnapshot s;
     void *target = base + OPC_CALLBACK_RVA;
     if (expect(binding_inspect((uintptr_t)base, target, &s), 0, "valid binding") ||
@@ -46,9 +47,9 @@ int main(void) {
     *(uintptr_t *)(client + 0x1498) = 0;
     if (expect(binding_inspect((uintptr_t)base, target, &s), ERROR_NOT_READY, "missing network")) return 1;
     *(uintptr_t *)(client + 0x1498) = (uintptr_t)network;
-    *(uintptr_t *)(base + 0x3ceacf8) = 0;
+    *(uintptr_t *)(base + OPC_CLIENT_GLOBAL_RVA) = 0;
     if (expect(binding_inspect((uintptr_t)base, target, &s), ERROR_NOT_READY, "missing client")) return 1;
-    *(uintptr_t *)(base + 0x3ceacf8) = 1;
+    *(uintptr_t *)(base + OPC_CLIENT_GLOBAL_RVA) = 1;
     if (expect(binding_inspect((uintptr_t)base, target, &s), ERROR_PARTIAL_COPY, "unreadable client")) return 1;
     puts("PASS: binding lookup, method/owner/adjustment validation, writable-slot gate, unavailable objects");
     VirtualFree(listener, 0, MEM_RELEASE);

@@ -1,4 +1,4 @@
-(comment),32,OvP2020091700 - (ラスター実装時)
+﻿(comment),32,LP2026102100 - (OPより転記および最新化)
 通常攻撃(素手),3481186334,Melee,素手 first normal attack
 通常攻撃(素手),1578628668,Melee,素手 second normal attack
 通常攻撃(素手),888355388,Melee,素手 third normal attack
@@ -1309,6 +1309,7 @@ S4:累加追撃,99411394,Special,S4: Raising Pursuit(S-Class Special Ability)
 S5:反撃鋭刃,1868089408,Special,S5: Hangeki Edge (S-Class Special Ability)
 S5:追射剛矢,4233010551,Special,S5: Auxiliary Arrow (normal) (S-Class Special Ability)
 S5:追射剛矢,4233010550,Special,S5: Auxiliary Arrow (after dodge) (S-Class Special Ability)
+S6:累加拡域,2381338832,Special,S6: Raising Expanse(S-Class Special Ability)
 Emperappy hug <3,2088559161,Special,Emperappy hug <3
 東京風ハンバーグ,585389849,Special,Tokyo Style Hamburger (Cuisine)
 磁雷針,2370429206,Special,Magnetic Needle (Skyscape areas)
@@ -1620,6 +1621,7 @@ PTF(ロッド),2682739872
 フォトンスピア,3274277101,Special,Luster Photon Spear
 ステアタ(Luフォメル),3286390190,Melee,Luster Step Attack
 Luカウンター(フォメル),4109993569,Special,Luster Step Counter (Lu skill)
+Luカウンター(フォメル),2221684619,Special,Luster Weapon Action Counter
 ステップガード(フォメル),3233723013,Special,Luster Step Guard forward (Lu skill)
 ステップガード(フォメル),3113325750,Special,Luster Step Guard backward (Lu skill)
 ステップスライド(フォメル),444545478,Special,Luster Step Slide forward (Lu skill)
@@ -1694,6 +1696,7 @@ Luカウンター(フォメル),4109993569,Special,Luster Step Counter (Lu skill
 ステップガード(ザンディ),2785427875,Special,Luster Step Guard forward (Lu skill)
 ステップガード(ザンディ),1063829095,Special,Luster Step Guard backward (Lu skill)
 Luカウンター(ザンディ),3402465838,Special,Luster Step Counter (Lu skill)
+Luカウンター(ザンディ),2480579189,Special,Luster Weapon Action Counter
 ステップスライド(ザンディ),2972788088,Special,Luster Step Slide forward (Lu skill)
 ステップスライド(ザンディ),3228155310,Special,Luster Step Slide sideways (Lu skill)
 ステップスライド(ザンディ),14025793,Special,Luster Step Slide backwards (Lu skill)
@@ -1773,6 +1776,7 @@ Luカウンター(ザンディ),3402465838,Special,Luster Step Counter (Lu skill
 ステップガード(バーラン),3070047115,Special,Luster Step Guard forward (Lu skill)
 ステップガード(バーラン),647085407,Special,Luster Step Guard backward (Lu skill)
 Luカウンター(バーラン),1754815403,Special,Luster Step Counter (Lu skill)
+Luカウンター(バーラン),2124983417,Special,Luster Weapon Action Counter
 ステップスライド(バーラン),1890244919,Special,Luster Step Slide forward (Lu skill)
 ステップスライド(バーラン),76288340,Special,Luster Step Slide sideways (Lu skill)
 ステップスライド(バーラン),861064826,Special,Luster Step Slide backwards (Lu skill)

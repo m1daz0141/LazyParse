@@ -1,6 +1,8 @@
 #include "win_util.h"
+#ifndef LAZYPARSE_PORTABLE
 #include "MinHook.h"
 #include "memory_protect_trace.h"
+#endif
 #include "binding_layout.h"
 #include "thread_guard.h"
 #include "identity_capture.h"
@@ -42,11 +44,40 @@ static void *hook_target;
 static BOOL slot_hook_mode;
 static BOOL hook_installed;
 static uintptr_t profile_base;
+static BOOL profile_unloaded;
 static void **fixture_slot;
 static BindingSnapshot attached_binding;
 static OpcThreadOps thread_ops;
+#ifdef OVERPARSE_TEST_HOST
+/* Fault injection is excluded from production DLLs. */
+static volatile LONG test_guard_denied;
+API DWORD WINAPI CaptureTestSetGuardDenied(void *enabled) {
+    InterlockedExchange(&test_guard_denied, enabled != NULL);
+    return ERROR_SUCCESS;
+}
+#endif
 static volatile LONG binding_ready, binding_error, guard_error;
 static volatile LONG guard_stage, guard_native_status, guard_threads, guard_fatal;
+static volatile LONG guard_owner_thread_id, guard_failed_thread_id, guard_failed_thread_exit_code;
+static volatile LONG guard_failed_thread_query_error, guard_operation_error, guard_resume_error;
+
+void CaptureGuardDiagnostics(OpcGuardDiagnostics *out) {
+    out->owner_thread_id = (DWORD)InterlockedCompareExchange(&guard_owner_thread_id, 0, 0);
+    out->failed_thread_id = (DWORD)InterlockedCompareExchange(&guard_failed_thread_id, 0, 0);
+    out->failed_thread_exit_code = (DWORD)InterlockedCompareExchange(&guard_failed_thread_exit_code, 0, 0);
+    out->failed_thread_query_error = (DWORD)InterlockedCompareExchange(&guard_failed_thread_query_error, 0, 0);
+    out->operation_error = (DWORD)InterlockedCompareExchange(&guard_operation_error, 0, 0);
+    out->resume_error = (DWORD)InterlockedCompareExchange(&guard_resume_error, 0, 0);
+}
+
+static void save_guard_diagnostics(const OpcGuardDiagnostics *data) {
+    InterlockedExchange(&guard_owner_thread_id, (LONG)data->owner_thread_id);
+    InterlockedExchange(&guard_failed_thread_id, (LONG)data->failed_thread_id);
+    InterlockedExchange(&guard_failed_thread_exit_code, (LONG)data->failed_thread_exit_code);
+    InterlockedExchange(&guard_failed_thread_query_error, (LONG)data->failed_thread_query_error);
+    InterlockedExchange(&guard_operation_error, (LONG)data->operation_error);
+    InterlockedExchange(&guard_resume_error, (LONG)data->resume_error);
+}
 static volatile LONG64 callbacks_total, last_callback_tick, binding_generation, connection_gaps;
 static ULONGLONG retry_attach_after;
 static volatile LONG damage_requested;
@@ -54,8 +85,10 @@ static DWORD wait_copiers(void);
 static DWORD attach_current(void);
 static DWORD verify_classic(void **target);
 static LONG64 counter(volatile LONG64 *p);
+#include "quest_catalog_capture.h"
 #include "identity_observer.h"
 
+#ifndef LAZYPARSE_PORTABLE
 #define PROTECT_TRACE_SLOTS 8
 typedef struct {
     volatile LONG ready;
@@ -148,6 +181,14 @@ static int format_protect_trace(char *buffer, size_t capacity) {
     int n = snprintf(buffer + used, capacity - (size_t)used, "]");
     return n == 1 && (size_t)used + 1 < capacity ? used + 1 : -1;
 }
+#else
+/* Keep the existing status fields readable by older log tools. The portable
+   build has no code-patching backend or page-protection operations. */
+static volatile LONG protect_calls;
+static int format_protect_trace(char *buffer, size_t capacity) {
+    return snprintf(buffer, capacity, "[]");
+}
+#endif
 
 static LONG64 counter(volatile LONG64 *p) { return InterlockedCompareExchange64(p, 0, 0); }
 
@@ -160,8 +201,8 @@ static DWORD wait_copiers(void) {
     return ERROR_SUCCESS;
 }
 
-static DWORD inspect_current(BindingSnapshot *snapshot) {
-    if (profile_base) return binding_inspect_methods(profile_base, hook_target,
+static DWORD inspect_at(uintptr_t base, void *target, BindingSnapshot *snapshot) {
+    if (base) return binding_inspect_methods(base, target,
                                                     (void *)(uintptr_t)&receive_hook, snapshot);
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->stage = "fixture_slot";
@@ -169,38 +210,86 @@ static DWORD inspect_current(BindingSnapshot *snapshot) {
     snapshot->listener = (uintptr_t)fixture_slot;
     if (!binding_writable_slot(fixture_slot)) return ERROR_NOACCESS;
     if (!binding_read((uintptr_t)fixture_slot, &snapshot->method, sizeof(snapshot->method))) return ERROR_PARTIAL_COPY;
-    return snapshot->method == (uintptr_t)hook_target || snapshot->method == (uintptr_t)&receive_hook ? 0 : ERROR_INVALID_DATA;
+    return snapshot->method == (uintptr_t)target || snapshot->method == (uintptr_t)&receive_hook ? 0 : ERROR_INVALID_DATA;
 }
 
-static DWORD attach_current(void) {
+static DWORD inspect_current(BindingSnapshot *snapshot) {
+    return inspect_at(profile_base, hook_target, snapshot);
+}
+
+static DWORD attach_binding(uintptr_t base, void *target, BOOL reload) {
+    if (guard_fatal) return ERROR_OPERATION_ABORTED;
+    if (reload && !profile_unloaded) return ERROR_REVISION_MISMATCH;
+    BindingSnapshot snapshot;
+    DWORD error = inspect_at(base, target, &snapshot);
+    if (error) return error;
+    /* Observation already installs the callback before recording starts.
+       Reuse that exact registration without writing its slot or suspending
+       threads. This is the same read-only validation used by Maintain.
+       A changed/new registration still needs the full guard below. */
+    if (!reload && hook_installed && snapshot.method == (uintptr_t)&receive_hook &&
+        snapshot.client == attached_binding.client && snapshot.network == attached_binding.network &&
+        snapshot.listener == attached_binding.listener && snapshot.method_slot == attached_binding.method_slot) {
+        InterlockedExchange(&guard_error, 0);
+        InterlockedExchange(&guard_stage, 0);
+        InterlockedExchange(&guard_native_status, 0);
+        InterlockedExchange(&guard_threads, 0);
+        OpcGuardDiagnostics clear = {0};
+        save_guard_diagnostics(&clear);
+        InterlockedExchange(&binding_error, 0);
+        InterlockedExchange(&binding_ready, 1);
+        return ERROR_SUCCESS;
+    }
     /* All allocations, file operations and loader calls stay outside this
        guard. Re-resolve from the live root, never write a cached object. */
     OpcThreadGuard guard;
-    if (guard_fatal) return ERROR_OPERATION_ABORTED;
-    DWORD error = opc_guard_enter(&guard, &thread_ops);
+#ifdef OVERPARSE_TEST_HOST
+    if (InterlockedCompareExchange(&test_guard_denied, 0, 0)) {
+        memset(&guard, 0, sizeof(guard));
+        guard.stage = 3;
+        guard.diagnostics.owner_thread_id = GetCurrentThreadId();
+        guard.diagnostics.operation_error = ERROR_ACCESS_DENIED;
+        error = ERROR_ACCESS_DENIED;
+    } else
+#endif
+    error = opc_guard_enter(&guard, &thread_ops);
+    save_guard_diagnostics(&guard.diagnostics);
     InterlockedExchange(&guard_stage, (LONG)guard.stage);
     InterlockedExchange(&guard_native_status, (LONG)guard.native_status);
     InterlockedExchange(&guard_threads, (LONG)guard.suspended_count);
     if (guard.resume_error) InterlockedExchange(&guard_fatal, 1);
     InterlockedExchange(&guard_error, (LONG)error);
     if (error) return error;
-    BindingSnapshot snapshot;
-    error = inspect_current(&snapshot);
+    error = inspect_at(base, target, &snapshot);
     BOOL exchanged = FALSE;
+    /* Forwarding is part of capture_active too. Never switch the original
+       function while a callback from the previous module is in flight. */
+    if (!error && reload && InterlockedCompareExchange(&capture_active, 0, 0)) error = ERROR_RETRY;
+    if (!error && reload && target != hook_target && snapshot.method == (uintptr_t)&receive_hook)
+        error = ERROR_INVALID_DATA;
     if (!error && GetTickCount64() >= guard.deadline) error = ERROR_TIMEOUT;
-    if (!error && snapshot.method == (uintptr_t)hook_target) {
+    if (!error && snapshot.method == (uintptr_t)target) {
         if (InterlockedCompareExchangePointer((void **)snapshot.method_slot,
-            (void *)(uintptr_t)&receive_hook, hook_target) != hook_target) error = ERROR_RETRY;
+            (void *)(uintptr_t)&receive_hook, target) != target) error = ERROR_RETRY;
         else exchanged = TRUE;
     }
+    if (!error && reload) {
+        /* Commit only after revalidation and CAS. Do not dereference or write
+           the old registration: its module and objects may already be gone. */
+        profile_base = base;
+        hook_target = target;
+        original_callback = (ReceiveCallback)target;
+        profile_unloaded = FALSE;
+    }
     DWORD resume_error = opc_guard_leave(&guard);
+    save_guard_diagnostics(&guard.diagnostics);
     if (resume_error) {
         InterlockedExchange(&guard_error, (LONG)resume_error);
         InterlockedExchange(&guard_fatal, 1);
         return resume_error;
     }
     if (error) return error;
-    if (exchanged || snapshot.client != attached_binding.client ||
+    if (reload || exchanged || snapshot.client != attached_binding.client ||
         snapshot.network != attached_binding.network || snapshot.listener != attached_binding.listener)
         InterlockedIncrement64(&binding_generation);
     attached_binding = snapshot;
@@ -208,6 +297,32 @@ static DWORD attach_current(void) {
     InterlockedExchange(&binding_error, 0);
     InterlockedExchange(&binding_ready, 1);
     return ERROR_SUCCESS;
+}
+
+static DWORD attach_current(void) {
+    return attach_binding(profile_base, hook_target, FALSE);
+}
+
+static DWORD refresh_classic_binding(void) {
+    HMODULE module = GetModuleHandleW(L"pso2classic.dll");
+    if (!module) {
+        profile_unloaded = TRUE;
+        return ERROR_MOD_NOT_FOUND;
+    }
+    if (!profile_unloaded) return (uintptr_t)module == profile_base ? 0 : ERROR_REVISION_MISMATCH;
+    if (GetTickCount64() < retry_attach_after) return guard_error ? (DWORD)guard_error : ERROR_RETRY;
+    /* A temporary normal reference holds this image through verification and
+       attachment. This does not pin Classic or prevent later title returns. */
+    HMODULE held;
+    if (!GetModuleHandleExW(0, L"pso2classic.dll", &held)) return GetLastError();
+    void *target = NULL;
+    DWORD error = verify_classic(&target); /* Exact hash + code/descriptor checks. */
+    if (!error) {
+        error = attach_binding((uintptr_t)held, target, TRUE);
+        retry_attach_after = error && guard_error ? GetTickCount64() + 5000 : 0;
+    }
+    FreeLibrary(held);
+    return error;
 }
 
 static BOOL write_all(HANDLE file, const void *data, DWORD bytes) {
@@ -251,7 +366,7 @@ static void write_status(BOOL stopped) {
         "  \"callbacks_total\": %lld,\n  \"last_callback_tick\": %lld,\n"
         "  \"binding_generation\": %lld,\n  \"connection_gaps\": %lld,\n"
         "  \"virtual_protect_trace\": %s,\n"
-        "  \"source_sha256\": \"%s\",\n  \"callback_rva\": \"0xc640f0\",\n"
+        "  \"source_sha256\": \"%s\",\n  \"callback_rva\": \"0x%x\",\n"
         "  \"body_field_meanings_live_verified\": false,\n"
         "  \"identity_matching\": %lld,\n  \"identity_enqueued\": %lld,\n"
         "  \"identity_dropped\": %lld,\n  \"identity_written\": %lld,\n"
@@ -260,15 +375,23 @@ static void write_status(BOOL stopped) {
         stopped ? "true" : "false", counter(&observed), counter(&matching),
         counter(&invalid_size), counter(&enqueued), counter(&dropped), counter(&written),
         (long)io_error, (unsigned long)hook_status,
+#ifdef LAZYPARSE_PORTABLE
+        "not_used",
+#else
         slot_hook_mode ? "not_used" : MH_StatusToString((MH_STATUS)hook_status),
+#endif
         (long)InterlockedCompareExchange(&protect_calls, 0, 0),
+#ifdef LAZYPARSE_PORTABLE
+        "bound_callback_slot",
+#else
         slot_hook_mode ? "bound_callback_slot" : "minhook_code_patch",
+#endif
         damage_requested ? "true" : "false",
         binding_ready ? "true" : "false", (long)binding_error, (long)guard_error,
         (long)guard_stage, (unsigned long)(DWORD)guard_native_status, (long)guard_threads, guard_fatal ? "true" : "false",
         counter(&callbacks_total), counter(&last_callback_tick), counter(&binding_generation),
         counter(&connection_gaps), trace_json,
-        mock_mode ? "not_a_game_capture" : OPC_CLASSIC_SHA256,
+        mock_mode ? "not_a_game_capture" : OPC_CLASSIC_SHA256, (unsigned)OPC_CALLBACK_RVA,
         counter(&identity_matching), counter(&identity_enqueued), counter(&identity_dropped),
         counter(&identity_written), counter(&identity_invalid));
     if (len < 0 || (size_t)len >= sizeof(buf)) return;
@@ -379,6 +502,7 @@ static void capture_identity(const unsigned char *packet) {
 
 static uintptr_t receive_hook(void *client, const unsigned char *packet) {
     InterlockedIncrement(&capture_active);
+    ReceiveCallback forward = original_callback;
     InterlockedIncrement64(&callbacks_total);
     InterlockedExchange64(&last_callback_tick, (LONG64)GetTickCount64());
     if (InterlockedCompareExchange(&observer_accepting, 0, 0)) observer_packet(packet);
@@ -412,8 +536,9 @@ static uintptr_t receive_hook(void *client, const unsigned char *packet) {
             }
         }
     }
+    uintptr_t result = forward(client, packet);
     InterlockedDecrement(&capture_active);
-    return original_callback(client, packet);
+    return result;
 }
 
 static DWORD verify_classic(void **target) {
@@ -433,7 +558,7 @@ static DWORD verify_classic(void **target) {
         return ERROR_BAD_EXE_FORMAT;
     IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(base + dos->e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
-        nt->OptionalHeader.SizeOfImage <= 0x3cead00) return ERROR_BAD_EXE_FORMAT;
+        nt->OptionalHeader.SizeOfImage < OPC_REQUIRED_IMAGE_SIZE) return ERROR_BAD_EXE_FORMAT;
     static const unsigned char expected[] = {
         0x33,0xc0,0x48,0x89,0x81,0xcc,0x14,0,0,0x44,0x0f,0xb6,0x42,2,
         0x0f,0xb7,2,0x41,0xc1,0xe0,0x10,0x44,0x0b,0xc0,0x44,0x01,
@@ -443,8 +568,9 @@ static DWORD verify_classic(void **target) {
     if (!opc_readable(*target, sizeof(expected), TRUE) || memcmp(*target, expected, sizeof(expected)))
         return ERROR_INVALID_DATA;
     static const unsigned char descriptor[8] = {3,0,0x40,0,0x54,0,0,0};
-    if (nt->OptionalHeader.SizeOfImage < 0x38768b8 ||
-        !opc_readable(base + 0x38768b0, 8, FALSE) || memcmp(base + 0x38768b0, descriptor, 8))
+    if (nt->OptionalHeader.SizeOfImage < OPC_DAMAGE_DESCRIPTOR_RVA + 8 ||
+        !opc_readable(base + OPC_DAMAGE_DESCRIPTOR_RVA, 8, FALSE) ||
+        memcmp(base + OPC_DAMAGE_DESCRIPTOR_RVA, descriptor, 8))
         return ERROR_INVALID_DATA;
     return ERROR_SUCCESS;
 }
@@ -463,7 +589,9 @@ static DWORD start_capture(const OpcConfig *config, void *target, BOOL is_mock, 
     io_error = 0;
     observed = matching = invalid_size = enqueued = dropped = written = 0;
     identity_matching = identity_enqueued = identity_dropped = identity_written = identity_invalid = 0;
+#ifndef LAZYPARSE_PORTABLE
     memset(protect_trace, 0, sizeof(protect_trace));
+#endif
     InterlockedExchange(&protect_calls, 0);
     InitializeSListHead(&free_entries);
     InitializeSListHead(&pending_entries);
@@ -471,22 +599,30 @@ static DWORD start_capture(const OpcConfig *config, void *target, BOOL is_mock, 
     InitializeSListHead(&identity_pending);
     for (unsigned i = 0; i < QUEUE_SIZE; ++i) InterlockedPushEntrySList(&free_entries, &queue[i].link);
     for (unsigned i = 0; i < OPI_QUEUE_SIZE; ++i) InterlockedPushEntrySList(&identity_free, &identity_queue[i].link);
-    mock_mode = is_mock;
-    slot_hook_mode = method_slot != NULL;
+    BOOL candidate_slot_mode = method_slot != NULL;
     wcscpy(output_dir, config->output_directory);
     /* Absolute local output path, prepared by the caller. */
     if (wcslen(output_dir) < 3 || output_dir[1] != L':' || output_dir[2] != L'\\') {
         error = ERROR_BAD_PATHNAME; goto fail;
     }
+    uintptr_t candidate_base;
     if (!is_mock) {
         error = verify_classic(&target);
         if (error) goto fail;
 #ifdef OVERPARSE_CALLBACK_SLOT
-        profile_base = (uintptr_t)GetModuleHandleW(L"pso2classic.dll");
-        slot_hook_mode = TRUE;
+        candidate_base = (uintptr_t)GetModuleHandleW(L"pso2classic.dll");
+        candidate_slot_mode = TRUE;
+#else
+        candidate_base = profile_base;
 #endif
-    } else profile_base = (uintptr_t)mock_base;
+    } else candidate_base = (uintptr_t)mock_base;
     if (hook_installed && target != hook_target) { error = ERROR_REVISION_MISMATCH; goto fail; }
+#ifdef LAZYPARSE_PORTABLE
+    if (!candidate_slot_mode && !candidate_base) { error = ERROR_NOT_SUPPORTED; goto fail; }
+#endif
+    mock_mode = is_mock;
+    slot_hook_mode = candidate_slot_mode;
+    profile_base = candidate_base;
     hook_target = target;
     fixture_slot = method_slot;
     if (profile_base) slot_hook_mode = TRUE;
@@ -517,17 +653,20 @@ static DWORD start_capture(const OpcConfig *config, void *target, BOOL is_mock, 
     wake_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (!wake_event || !stop_event) { error = GetLastError(); goto fail; }
-    hook_status = MH_OK;
+    hook_status = 0;
     if (slot_hook_mode) {
         original_callback = (ReceiveCallback)target;
         error = opc_thread_ops_init(&thread_ops);
         if (error) goto fail;
-    } else if (!hook_installed) {
+    }
+#ifndef LAZYPARSE_PORTABLE
+    else if (!hook_installed) {
         hook_status = MH_Initialize();
         if (hook_status != MH_OK) { error = ERROR_FUNCTION_FAILED; goto fail; }
         hook_status = MH_CreateHook(target, receive_hook, (void **)&original_callback);
         if (hook_status != MH_OK) { error = ERROR_NOT_SUPPORTED; MH_Uninitialize(); goto fail; }
     }
+#endif
     /* Pin before enabling: forwarded calls can still be in flight after stop. */
     HMODULE pinned;
     if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -540,11 +679,14 @@ static DWORD start_capture(const OpcConfig *config, void *target, BOOL is_mock, 
         InterlockedExchange(&binding_ready, 0);
         error = attach_current();
         InterlockedExchange(&binding_error, (LONG)error);
-    } else if (!hook_installed) {
+    }
+#ifndef LAZYPARSE_PORTABLE
+    else if (!hook_installed) {
         hook_status = MH_EnableHook(target);
         if (hook_status != MH_OK) error = ERROR_NOT_SUPPORTED;
         else { hook_installed = TRUE; InterlockedExchange(&binding_ready, 1); }
     }
+#endif
     if (error) {
         InterlockedExchange(&accepting, 0);
         SetEvent(stop_event);
@@ -557,7 +699,9 @@ static DWORD start_capture(const OpcConfig *config, void *target, BOOL is_mock, 
     InterlockedExchange(&accepting, 1);
     return ERROR_SUCCESS;
 fail_hook:
+#ifndef LAZYPARSE_PORTABLE
     if (!slot_hook_mode && !hook_installed) { MH_RemoveHook(target); MH_Uninitialize(); }
+#endif
 fail:
     if (identity_file != INVALID_HANDLE_VALUE) { CloseHandle(identity_file); identity_file = INVALID_HANDLE_VALUE; }
     if (capture_file != INVALID_HANDLE_VALUE) { CloseHandle(capture_file); capture_file = INVALID_HANDLE_VALUE; }
@@ -578,7 +722,8 @@ API DWORD WINAPI CaptureMaintain(void *unused) {
     if (io_error && damage_requested) { error = (DWORD)io_error; goto done; }
     if (slot_hook_mode) {
         BindingSnapshot current;
-        error = inspect_current(&current);
+        error = mock_mode ? ERROR_SUCCESS : refresh_classic_binding();
+        if (!error) error = inspect_current(&current);
         if (error || current.client != attached_binding.client || current.network != attached_binding.network ||
             current.listener != attached_binding.listener || current.method != (uintptr_t)&receive_hook) {
             DWORD snapshot_error = error;
@@ -665,10 +810,14 @@ DWORD CaptureProbeBinding(const wchar_t *directory) {
     int n = snprintf(text, sizeof(text),
         "{\"stage\":\"%s\",\"win32_error\":%lu,\"read_only\":true,"
         "\"client\":\"0x%llx\",\"network\":\"0x%llx\",\"listener\":\"0x%llx\","
-        "\"method_slot\":\"0x%llx\",\"method_slot_requires_protection_change\":false}\n",
+        "\"method_slot\":\"0x%llx\",\"method_slot_requires_protection_change\":false,"
+        "\"classic_module\":\"0x%llx\",\"verified_target\":\"0x%llx\","
+        "\"attached_module\":\"0x%llx\",\"attached_target\":\"0x%llx\",\"module_unloaded_observed\":%s}\n",
         snapshot.stage, (unsigned long)error, (unsigned long long)snapshot.client,
         (unsigned long long)snapshot.network, (unsigned long long)snapshot.listener,
-        (unsigned long long)snapshot.method_slot);
+        (unsigned long long)snapshot.method_slot, (unsigned long long)(uintptr_t)module,
+        (unsigned long long)(uintptr_t)target, (unsigned long long)profile_base,
+        (unsigned long long)(uintptr_t)hook_target, profile_unloaded ? "true" : "false");
     HANDLE file = CreateFileW(temp, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
     if (file == INVALID_HANDLE_VALUE) return GetLastError();
     DWORD bytes;
@@ -681,17 +830,41 @@ DWORD CaptureProbeBinding(const wchar_t *directory) {
 #endif
 
 #ifdef OVERPARSE_TEST_HOST
+/* Test models supply an already verified layout, as CaptureStartTest does.
+   NULL simulates observing Classic absent; no production export exists. */
+API DWORD WINAPI CaptureTestRefreshProfile(void *argument) {
+    if (!argument) {
+        profile_unloaded = TRUE;
+        InterlockedExchange(&accepting, 0);
+        InterlockedExchange(&observer_accepting, 0);
+        if (InterlockedExchange(&binding_ready, 0)) {
+            InterlockedIncrement64(&connection_gaps);
+            if (observing) {
+                DWORD error = wait_copiers();
+                if (error) return error;
+                observer_reset();
+            }
+        }
+        return ERROR_SUCCESS;
+    }
+    OpcTestConfig *test = argument;
+    if (!test->profile_base || !test->callback) return ERROR_INVALID_PARAMETER;
+    return attach_binding((uintptr_t)test->profile_base, test->callback, TRUE);
+}
+
 API DWORD WINAPI CaptureStartTest(void *argument) {
     OpcTestConfig *test = argument;
     if (!test || !test->callback || !opc_readable(test->callback, 16, TRUE)) return ERROR_INVALID_PARAMETER;
     return start_capture(&test->config, test->callback, TRUE, test->method_slot, test->profile_base);
 }
 
+#ifndef LAZYPARSE_PORTABLE
 API DWORD WINAPI CaptureProbeProtectTest(void *address) {
     DWORD old;
     SetLastError(0x12345678);
     return OpcVirtualProtect(address, 4096, PAGE_EXECUTE_READWRITE, &old) ? 0 : GetLastError();
 }
+#endif
 #endif
 
 API DWORD WINAPI CaptureStop(void *unused) {

@@ -33,7 +33,9 @@ class CatalogTests(unittest.TestCase):
             self.assertFalse(fallback.metadata()['editable']['available'])
 
     def test_pinned_bytes_count_and_comment_are_not_an_attack(self):
-        catalog = get_catalog()
+        # The pinned source has 1900 IDs; a user's editable CSV can add more.
+        with tempfile.TemporaryDirectory() as work:
+            catalog = AttackCatalog.load(editable=Path(work) / 'absent.csv')
         self.assertIsNone(catalog.error)
         self.assertEqual(len(catalog.entries), 1900)
         self.assertEqual(hashlib.sha256((DATA / 'skills_ja.csv').read_bytes()).hexdigest(), catalog.source['sha256'])
@@ -123,7 +125,7 @@ class LiveRecordingTests(unittest.TestCase):
         self.assertTrue(all(event['attack_name_matched'] for event in events if event['signed_value'] > 1))
         self.assertEqual(report['counts']['negative_sum'], -539)
         self.assertEqual(hashlib.sha256(CAPTURE.read_bytes()).hexdigest(),
-                         '0000000000000000000000000000000000000000000000000000000000000000')
+                         '79f87f5cd632c61d6d311df08372bdb29025ae77ebc1a8508ea0fa34d1724ff6')
 
 
 if __name__ == '__main__':

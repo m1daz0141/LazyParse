@@ -5,13 +5,15 @@ import io
 from pathlib import Path
 
 from ..binary_analysis.probe_damage_packet import decode
+from ..paths import CONFIG
 
 OFFSET = 0x44
 JA_MASK = 0x01
 CRIT_MASK = 0x40
 TACT_NORMAL_ATTACK = 4065469038
 RULES_PATH = Path(__file__).resolve().parent / 'data/ja_exclusions.csv'
-LOCAL_RULES_PATH = Path(__file__).resolve().parent / 'ja_exclusions.local.csv'
+LOCAL_RULES_PATH = CONFIG / 'ja_exclusions.csv'
+LEGACY_LOCAL_RULES_PATH = Path(__file__).resolve().parent / 'ja_exclusions.local.csv'
 LEGACY_SOURCE = {
     'repository': 'https://github.com/approved/PSO2DamageDump',
     'commit': '4cafb9fce2b8f172b2c050d90713663aa1f09dd2',
@@ -25,7 +27,8 @@ LEGACY_SOURCE = {
 def read_ja_exclusions(path=None):
     """Load LazyParse rules or an explicit local override, without old UI files."""
     if path is None:
-        path = LOCAL_RULES_PATH if LOCAL_RULES_PATH.is_file() else RULES_PATH
+        path = next((candidate for candidate in (LOCAL_RULES_PATH, LEGACY_LOCAL_RULES_PATH, RULES_PATH)
+                     if candidate.is_file()), RULES_PATH)
     try:
         raw = Path(path).read_bytes()
         values = []
@@ -39,7 +42,7 @@ def read_ja_exclusions(path=None):
             raise ValueError('JA exclusion ID is outside uint32')
         return frozenset(values), {'path': str(path), 'sha256': hashlib.sha256(raw).hexdigest(),
             'rows': len(values), 'distinct_ids': len(set(values)), 'available': True, 'error': None,
-            'policy': 'local_override' if Path(path) == LOCAL_RULES_PATH else 'independent_rules',
+            'policy': 'local_override' if Path(path) in {LOCAL_RULES_PATH, LEGACY_LOCAL_RULES_PATH} else 'independent_rules',
             'requires_overparse_files': False}
     except (OSError, ValueError, csv.Error) as error:
         return None, {'path': str(path), 'available': False, 'error': str(error)}

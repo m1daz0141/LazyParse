@@ -2,6 +2,8 @@
 from collections import defaultdict
 from ..attack_catalog.catalog import attack_label, get_catalog
 from ..combat_core.hit_rates import HitRates
+from ..combat_core.damage_policy import included_totals
+from .control import preparation_error
 
 COLUMNS = [('name', 'Name', 112), ('share', '%', 38), ('damage_dealt', 'Damage', 76),
     ('damage_taken', 'Taken', 48), ('dps', 'DPS', 64), ('ja', 'JA %', 40),
@@ -84,12 +86,20 @@ def attack_rows(report, actor):
             continue
         key = attack['attack_id']
         row = merged.setdefault(key, {'attack_id': key, **get_catalog().labels(key),
-                                     'damage_dealt': 0, 'hits_dealt': 0, 'max_hit': 0, 'hit_rates': HitRates()})
+                                     'damage_dealt': 0, 'hits_dealt': 0, 'max_hit': 0, 'min_hit': None,
+                                     'min_complete': True, 'hit_rates': HitRates()})
         row['damage_dealt'] += attack['damage_dealt']
         row['hits_dealt'] += attack['hits_dealt']
         row['max_hit'] = max(row['max_hit'], attack['max_hit'])
+        if attack['hits_dealt']:
+            if attack.get('min_hit') is None:
+                row['min_complete'] = False
+            else:
+                row['min_hit'] = min(row['min_hit'], attack['min_hit']) if row['min_hit'] is not None else attack['min_hit']
         row['hit_rates'].merge(HitRates.from_totals(attack))
     for row in merged.values():
+        if not row.pop('min_complete'):
+            row['min_hit'] = None
         row['hit_rates'] = row['hit_rates'].as_dict()
         row['ja'] = row['hit_rates']['ja_percent']
         row['crit'] = row['hit_rates']['crit_percent']
@@ -133,6 +143,10 @@ def status_view(snapshot, *, saved=False):
     if saved:
         quest = (snapshot.get('measurement') or {}).get('report', {}).get('quest_measurement')
         return ('保存ログ・自動判定（試験中）' if quest else '保存ログ'), '#c5ac73'
+    if snapshot.get('game_version_error'):
+        return 'ゲームDLLの確認が必要', '#ef8b87'
+    if preparation_error(snapshot):
+        return '識別情報の取得エラー', '#ef8b87'
     if snapshot.get('effective_recording'):
         if snapshot.get('auto_save_error'):
             return '自動保存エラー・記録中', '#ef8b87'
@@ -142,6 +156,8 @@ def status_view(snapshot, *, saved=False):
                 return '自動判定保留・記録中', '#ddb577'
             reason = quest.get('end_reason')
             label = ('クリア候補・次を待機' if reason in {'clear_candidate', 'clear_candidate_with_result'} else
+                     '失敗・次を待機' if reason == 'failure_candidate' else
+                     '失敗後帰還・次を待機' if reason == 'failure_return_candidate' else
                      '次のクエスト待機' if reason else 'クエスト計測中')
             return label + '（試験中）', '#69c9b0'
         if snapshot.get('auto_quests_enabled'):
@@ -150,7 +166,7 @@ def status_view(snapshot, *, saved=False):
                 return '自動判定対象外・記録中', '#ddb577'
             if view.get('suspended'):
                 return '自動判定保留・記録中', '#ddb577'
-            counts = (snapshot.get('measurement') or {}).get('report', {}).get('counts', {})
+            counts = included_totals((snapshot.get('measurement') or {}).get('report', {}))
             return ('クエスト不明・記録中' if counts.get('positive_records') else
                     'クエスト待機（試験中）'), '#ddb577'
         active = (snapshot.get('measurement') or {}).get('activity', {}).get('active', False)

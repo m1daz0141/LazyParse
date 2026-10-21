@@ -102,9 +102,9 @@ def expand_tara(record, modulus, exponent):
                       "checksum_valid": True, "rsa_padding_valid": True, "sha256": sha256(expanded)}
 
 
-def expand(path, output_directory):
+def expand(path, output_directory, *, expected_sha256=SUPPORTED_SHA256):
     data = path.read_bytes()
-    if sha256(data) != SUPPORTED_SHA256:
+    if sha256(data) != expected_sha256:
         raise ValueError("unsupported DLL hash: investigate this build before extending the profile")
     output_directory = output_directory.resolve()
     if output_directory.is_relative_to(path.resolve().parent):

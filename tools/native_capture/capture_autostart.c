@@ -1,7 +1,28 @@
 #include "runtime_control.h"
 #include "atomic_file.h"
+#include "thread_guard.h"
 
-#ifndef AUTO_SESSION_DIR
+#ifdef LAZYPARSE_PORTABLE
+static wchar_t portable_session[OPC_PATH_CHARS];
+#define AUTO_SESSION_DIR portable_session
+static DWORD portable_paths(void) {
+    HMODULE module = NULL;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)portable_session, &module)) return GetLastError();
+    DWORD count = GetModuleFileNameW(module, portable_session, OPC_PATH_CHARS);
+    if (!count || count >= OPC_PATH_CHARS) return ERROR_BAD_PATHNAME;
+    /* <home>/config/native/<build>/Capture.dll -> <home>/logs/captures. */
+    for (unsigned i = 0; i < 4; ++i) {
+        wchar_t *slash = wcsrchr(portable_session, L'\\');
+        if (!slash) return ERROR_BAD_PATHNAME;
+        *slash = 0;
+    }
+    const wchar_t suffix[] = L"\\logs\\captures";
+    if (wcslen(portable_session) + wcslen(suffix) >= OPC_PATH_CHARS) return ERROR_BAD_PATHNAME;
+    wcscat(portable_session, suffix);
+    return ERROR_SUCCESS;
+}
+#elif !defined(AUTO_SESSION_DIR)
 #error Build with build_autostart.ps1
 #endif
 #ifdef OVERPARSE_RUNTIME_TEST
@@ -57,6 +78,8 @@ static BOOL save_state(const char *state, DWORD error) {
     const char *receive_state = !health.recording ? "not_recording" :
         health.callbacks_total == receive_baseline ? "awaiting_first_packet" : age >= 15000 ? "quiet" : "receiving";
     char text[OPC_PATH_CHARS * 18];
+    OpcGuardDiagnostics guard;
+    CaptureGuardDiagnostics(&guard);
     int n = snprintf(text, sizeof(text),
         "{\n  \"control_abi\":1,\"state\":\"%s\",\"pid\":%lu,\"win32_error\":%lu,\n"
         "  \"state_filetime\":%llu,\n"
@@ -65,6 +88,9 @@ static BOOL save_state(const char *state, DWORD error) {
         "  \"desired_recording\":%s,\"recording\":%s,\"binding_ready\":%s,\n"
         "  \"binding_error\":%lu,\"guard_error\":%lu,\"io_error\":%lu,\n"
         "  \"guard_stage\":%u,\"guard_native_status\":\"0x%08x\",\"guard_threads\":%u,\"guard_fatal\":%s,\n"
+        "  \"guard_owner_thread_id\":%lu,\"guard_failed_thread_id\":%lu,\n"
+        "  \"guard_failed_thread_exit_code\":%lu,\"guard_failed_thread_query_error\":%lu,\n"
+        "  \"guard_operation_error\":%lu,\"guard_resume_error\":%lu,\n"
         "  \"callbacks_total\":%llu,\"binding_generation\":%llu,\"connection_gaps\":%llu,\n"
         "  \"receive_state\":\"%s\",\"receive_age_ms\":%lld,\"last_capture_error\":%lu,\n"
         "  \"classic_hash_required\":\"%s\",\n"
@@ -76,6 +102,9 @@ static BOOL save_state(const char *state, DWORD error) {
         health.recording ? "true" : "false", health.binding_ready ? "true" : "false",
         (unsigned long)health.binding_error, (unsigned long)health.guard_error, (unsigned long)health.io_error,
         health.guard_stage, health.guard_native_status, health.guard_threads, health.guard_fatal ? "true" : "false",
+        (unsigned long)guard.owner_thread_id, (unsigned long)guard.failed_thread_id,
+        (unsigned long)guard.failed_thread_exit_code, (unsigned long)guard.failed_thread_query_error,
+        (unsigned long)guard.operation_error, (unsigned long)guard.resume_error,
         (unsigned long long)health.callbacks_total, (unsigned long long)health.binding_generation,
         (unsigned long long)health.connection_gaps, receive_state, age, last_capture_error, OPC_CLASSIC_SHA256,
         health.observing ? "true" : "false", (unsigned long)health.context_error,
@@ -170,6 +199,10 @@ static DWORD start_segment(void) {
 
 DWORD WINAPI CaptureAutostart(void *unused) {
     (void)unused;
+#ifdef LAZYPARSE_PORTABLE
+    DWORD path_error = portable_paths();
+    if (path_error) return path_error;
+#endif
     wchar_t executable[32768];
     DWORD n = GetModuleFileNameW(NULL, executable, 32768);
     if (!n || n >= 32768) return ERROR_BAD_PATHNAME;
@@ -201,7 +234,9 @@ DWORD WINAPI CaptureAutostart(void *unused) {
             if (observer_error_code) next_observer_attempt = GetTickCount64() + 5000;
             refresh_health();
         }
-        if (health.observing) { (void)CaptureMaintain(NULL); refresh_health(); }
+        BOOL maintained = health.observing;
+        DWORD maintenance_error = ERROR_SUCCESS;
+        if (maintained) { maintenance_error = CaptureMaintain(NULL); refresh_health(); }
         OpcCommand command;
         DWORD parse_error = opc_read_command(run_directory, &command);
         if (!parse_error && command.id > command_id) {
@@ -215,6 +250,7 @@ DWORD WINAPI CaptureAutostart(void *unused) {
                     desired = error == ERROR_SUCCESS;
                     last_capture_error = error;
                     writer_failed = FALSE;
+                    if (!error) maintained = FALSE; /* Check the newly started segment. */
                 }
             } else {
                 desired = FALSE;
@@ -224,7 +260,7 @@ DWORD WINAPI CaptureAutostart(void *unused) {
             command_id = command.id; last_command = command.kind; command_error = error;
             refresh_health();
         }
-        DWORD error = ERROR_SUCCESS;
+        DWORD error = maintenance_error;
         const char *state;
         if (!desired && health.draining) {
             error = stop_segment();
@@ -244,7 +280,7 @@ DWORD WINAPI CaptureAutostart(void *unused) {
             }
             state = "stopping";
         } else if (desired && health.requested) {
-            error = CaptureMaintain(NULL);
+            if (!maintained) error = CaptureMaintain(NULL);
             refresh_health();
             if (health.io_error || health.context_error) {
                 last_capture_error = health.io_error ? health.io_error : health.context_error;
@@ -255,10 +291,11 @@ DWORD WINAPI CaptureAutostart(void *unused) {
                 state = "writer_error";
             } else state = health.recording ? "recording" : "waiting_for_binding";
         } else {
-            error = probe_error ? probe_error : health.context_error;
+            error = probe_error ? probe_error : health.context_error ? health.context_error : health.binding_error;
             state = health.draining ? "stopping" : writer_failed ? "writer_error" : last_capture_error ? "capture_start_failed" :
                 probe_error == ERROR_MOD_NOT_FOUND ? "waiting_for_classic" :
                 probe_error ? "waiting_for_binding" : health.context_error ? "identity_context_error" :
+                health.binding_error ? "waiting_for_binding" :
                 !health.observing ? "waiting_for_identity_context" : "binding_ready_waiting_for_start";
             if (segment_number && !last_capture_error && !health.draining && !error && health.observing) state = "paused";
         }

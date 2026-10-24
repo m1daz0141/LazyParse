@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import queue
 import tkinter as tk
-from tkinter import filedialog, font, ttk, messagebox
+from tkinter import filedialog, font, ttk, messagebox, colorchooser
 
 from .settings import Settings, STATE
 from .viewmodel import COLUMNS, number, percentage, actor_rows, attack_rows, source_rows, clipboard_summary, status_view, rate_tooltip, display_elapsed, elapsed_label
@@ -15,6 +15,8 @@ from .text_export import EXPORT_DIRECTORY, filename
 from .backend import stored_history, history_key
 from .control import preparation_error
 from ..version import VERSION
+from .appearance import (palette, rgb, rgb_color, Background, import_background,
+                         remove_background, DEFAULT_BACKGROUND, DEFAULT_ACCENT)
 
 BG = '#0a0a0a'
 PANEL = '#15191c'
@@ -25,8 +27,9 @@ ACCENT = '#76d5cf'
 
 
 class Tooltip:
-    def __init__(self, root):
+    def __init__(self, root, theme=None):
         self.root, self.window, self.timer = root, None, None
+        self.theme = theme
 
     def hide(self, event=None):
         if self.timer:
@@ -46,6 +49,8 @@ class Tooltip:
             self.window.geometry(f'+{x + 10}+{y + 14}')
             tk.Label(self.window, text=text, background='#252d32', foreground=TEXT, padx=8, pady=5,
                      font=('Meiryo UI', 9), justify='left').pack()
+            if self.theme:
+                self.theme(self.window)
         self.timer = self.root.after(600, open_tip)
 
 
@@ -120,6 +125,8 @@ class Application:
     def __init__(self, root, backend, *, settings_path=STATE / 'preferences.json', start_backend=True):
         self.root, self.backend, self.settings_path = root, backend, Path(settings_path)
         self.settings = Settings.load(self.settings_path)
+        self.colors = palette(self.settings.theme_background, self.settings.theme_accent)
+        self.background = Background()
         self.backend.interval = self.settings.interval
         self.backend.auto_quests = self.settings.auto_quests
         self._sync_text_options()
@@ -137,7 +144,7 @@ class Application:
         self.details = {}
         self.drag = None
         self.closed = False
-        self.tooltip = Tooltip(root)
+        self.tooltip = Tooltip(root, self._theme_widgets)
         self.fonts = {}
         self.root.title('LazyParse ' + VERSION)
         self.app_icon = tk.PhotoImage(master=self.root, file=Path(__file__).with_name('assets') / 'icon.png')
@@ -152,6 +159,8 @@ class Application:
         self._style()
         self._build()
         self._menus()
+        self._apply_theme()
+        self._load_background()
         self.root.bind('<Control-Shift-E>', lambda event: self.command('Next'))
         self.root.bind('<Control-Shift-R>', lambda event: self.command('Reset'))
         self.root.bind('<Control-Shift-A>', lambda event: self.toggle('topmost'))
@@ -166,18 +175,19 @@ class Application:
     def _style(self):
         style = ttk.Style(self.root)
         style.theme_use('clam')
-        style.configure('LazyParse.Treeview', background=BG, fieldbackground=BG, foreground=TEXT,
+        c = self.colors
+        style.configure('LazyParse.Treeview', background=c[BG], fieldbackground=c[BG], foreground=c[TEXT],
                         borderwidth=0, rowheight=23, font=('Meiryo UI', 9))
-        style.configure('LazyParse.Treeview.Heading', background=PANEL, foreground=TEXT, font=('Meiryo UI', 9))
-        style.map('LazyParse.Treeview', background=[('selected', '#205c61')])
-        style.configure('TNotebook', background=BG, borderwidth=0)
-        style.configure('TNotebook.Tab', background=PANEL, foreground=TEXT, padding=(10, 5))
-        style.map('TNotebook.Tab', background=[('selected', '#1b6467')])
-        style.configure('LazyParse.Vertical.TScrollbar', background='#29353b', troughcolor=BG,
-                        bordercolor=BG, arrowcolor=MUTED, lightcolor='#29353b', darkcolor='#29353b')
-        style.map('LazyParse.Vertical.TScrollbar', background=[('active', '#426068')])
+        style.configure('LazyParse.Treeview.Heading', background=c[PANEL], foreground=c[TEXT], font=('Meiryo UI', 9))
+        style.map('LazyParse.Treeview', background=[('selected', c['#205c61'])], foreground=[('selected', c[TEXT])])
+        style.configure('TNotebook', background=c[BG], borderwidth=0)
+        style.configure('TNotebook.Tab', background=c[PANEL], foreground=c[TEXT], padding=(10, 5))
+        style.map('TNotebook.Tab', background=[('selected', c['#1b6467'])])
+        style.configure('LazyParse.Vertical.TScrollbar', background=c['#29353b'], troughcolor=c[BG],
+                        bordercolor=c[BG], arrowcolor=c[MUTED], lightcolor=c['#29353b'], darkcolor=c['#29353b'])
+        style.map('LazyParse.Vertical.TScrollbar', background=[('active', c['#426068'])])
         style.configure('LazyParse.Treeview.Heading', relief='flat', borderwidth=0,
-                        lightcolor=LINE, darkcolor=LINE, bordercolor=LINE)
+                        lightcolor=c[LINE], darkcolor=c[LINE], bordercolor=c[LINE])
 
     def _button(self, frame, text, command):
         return tk.Button(frame, text=text, command=command, bg=PANEL, fg=TEXT, activebackground='#29383f',
@@ -199,7 +209,7 @@ class Application:
         self.stop_button.pack(side='right', padx=(2, 0))
         self.start_button = self._button(self.bar, '記録', lambda: self.command('Start'))
         self.start_button.pack(side='right')
-        self.status = tk.Label(self.bar, bg=BG, fg=MUTED, text='● データ待ち', font=('Meiryo UI', 8), padx=9)
+        self.status = tk.Label(self.bar, bg=BG, fg=MUTED, text='● 待機中', font=('Meiryo UI', 8), padx=9)
         self.status.pack(side='right')
         self.status.bind('<ButtonPress-1>', self._drag_start)
         self.status.bind('<B1-Motion>', self._drag_move)
@@ -210,7 +220,7 @@ class Application:
         self.table = tk.Canvas(self.body_frame, bg=BG, highlightthickness=0)
         self.scrollbar = ttk.Scrollbar(self.body_frame, orient='vertical', command=self.table.yview,
                                        style='LazyParse.Vertical.TScrollbar')
-        self.table.configure(yscrollcommand=self.scrollbar.set)
+        self.table.configure(yscrollcommand=self._scrolled)
         self.table.pack(fill='both', expand=True)
         self.table.bind('<Button-1>', self._select)
         self.table.bind('<Double-Button-1>', self._open_selected)
@@ -251,7 +261,7 @@ class Application:
         self.logging_menu = logging
         logging.add_command(label='記録開始', command=lambda: self.command('Start'))
         logging.add_command(label='記録停止', command=lambda: self.command('Stop'))
-        self._check(logging, 'クエストごとに自動計測（試験中）', 'auto_quests')
+        self._check(logging, 'クエストごとに自動計測', 'auto_quests')
         self._check(logging, 'Timeを小数点まで表示', 'time_decimals')
         self._check(logging, '計測終了時にTXTを自動出力', 'auto_text_export')
         logging.add_separator()
@@ -282,6 +292,12 @@ class Application:
         self._check(display, '常に手前に表示', 'topmost')
         self._check(display, 'ダメージバー', 'bars')
         self._check(display, '自分を強調', 'highlight_self')
+        display.add_separator()
+        display.add_command(label='テーマカラー（RGB）…', command=self.choose_theme)
+        display.add_command(label='背景画像を選択…', command=self.choose_background)
+        display.add_command(label='背景画像をデフォルトに戻す', command=self.reset_background)
+        display.add_command(label='外観をデフォルトに戻す', command=self.reset_appearance)
+        display.add_separator()
         columns = tk.Menu(display, tearoff=False, bg=PANEL, fg=TEXT)
         display.add_cascade(label='表示する列', menu=columns)
         self.column_vars = {}
@@ -314,6 +330,127 @@ class Application:
         variable = tk.BooleanVar(value=getattr(self.settings, key))
         self.variables[key] = variable
         menu.add_checkbutton(label=label, variable=variable, command=lambda: self.toggle(key, variable.get()))
+
+    def _theme_widgets(self, widget):
+        # Remember semantic defaults once; RGB values can coincide in a custom
+        # palette, so reverse-mapping the current colors would lose their roles.
+        roles = getattr(widget, '_lazyparse_color_roles', None)
+        if roles is None:
+            roles = {}
+            for option in ('background', 'foreground', 'activebackground', 'activeforeground',
+                           'disabledforeground', 'insertbackground', 'selectbackground', 'selectforeground'):
+                if option not in widget.keys():
+                    continue
+                value = str(widget.cget(option)).lower()
+                if value in self.colors:
+                    roles[option] = value
+                elif value.startswith('system'):
+                    roles[option] = TEXT if 'foreground' in option else PANEL if 'active' in option else BG
+            widget._lazyparse_color_roles = roles
+        if roles:
+            widget.configure(**{option: self.colors[role] for option, role in roles.items()})
+        for child in widget.winfo_children():
+            self._theme_widgets(child)
+
+    def _apply_theme(self):
+        self.colors = palette(self.settings.theme_background, self.settings.theme_accent)
+        self._style()
+        self._theme_widgets(self.root)
+
+    def _load_background(self):
+        try:
+            self.background.load(self.settings.background_image, self.settings_path.parent)
+        except (OSError, ValueError) as error:
+            self.last_error = str(error)
+            self.notify('背景画像を読み込めません。「表示」から選び直すか、デフォルトに戻してください。')
+
+    def _commit_appearance(self, background, accent, image):
+        previous = (self.settings.theme_background, self.settings.theme_accent, self.settings.background_image)
+        self.settings.theme_background, self.settings.theme_accent, self.settings.background_image = background, accent, image
+        try:
+            self.settings.save(self.settings_path)
+        except OSError as error:
+            self.settings.theme_background, self.settings.theme_accent, self.settings.background_image = previous
+            messagebox.showerror('外観を保存できません', str(error), parent=self.root)
+            return False
+        self._apply_theme()
+        self._load_background()
+        if previous[2] and previous[2] != image:
+            remove_background(previous[2], self.settings_path.parent)
+        self.render()
+        return True
+
+    def choose_theme(self):
+        window = tk.Toplevel(self.root)
+        window.title('テーマカラー（RGB）')
+        window.resizable(False, False)
+        window.transient(self.root)
+        rows = []
+        for index, (label, value) in enumerate((('背景・パネル', self.settings.theme_background),
+                                               ('アクセント', self.settings.theme_accent))):
+            tk.Label(window, text=label, bg=BG, fg=TEXT).grid(row=index*2, column=0, padx=12, pady=8, sticky='w')
+            variables = [tk.StringVar(window, str(v)) for v in rgb(value)]
+            rows.append(variables)
+            for column, (channel, variable) in enumerate(zip(('R', 'G', 'B'), variables), 1):
+                frame = tk.Frame(window, bg=BG)
+                frame.grid(row=index*2, column=column, padx=4)
+                tk.Label(frame, text=channel, bg=BG, fg=TEXT).pack(side='left')
+                tk.Spinbox(frame, from_=0, to=255, width=4, textvariable=variable,
+                           bg=PANEL, fg=TEXT, insertbackground=TEXT).pack(side='left')
+            def pick(variables=variables):
+                try:
+                    initial = rgb_color([v.get() for v in variables])
+                except ValueError:
+                    initial = DEFAULT_ACCENT
+                _, chosen = colorchooser.askcolor(initialcolor=initial, parent=window, title='カラーを選択')
+                if chosen:
+                    for variable, value in zip(variables, rgb(chosen)):
+                        variable.set(str(value))
+            self._button(window, '色を選択…', pick).grid(row=index*2, column=4, padx=12)
+        def apply():
+            try:
+                background, accent = (rgb_color([v.get() for v in row]) for row in rows)
+            except ValueError as error:
+                messagebox.showerror('RGBを確認してください', str(error), parent=window)
+                return
+            if self._commit_appearance(background, accent, self.settings.background_image):
+                window.destroy()
+        def defaults():
+            for row, color in zip(rows, (DEFAULT_BACKGROUND, DEFAULT_ACCENT)):
+                for variable, value in zip(row, rgb(color)):
+                    variable.set(str(value))
+        buttons = tk.Frame(window, bg=BG)
+        buttons.grid(row=5, column=0, columnspan=5, pady=12)
+        for label, callback in (('デフォルトの色', defaults), ('適用', apply), ('キャンセル', window.destroy)):
+            self._button(buttons, label, callback).pack(side='left', padx=5)
+        self._theme_widgets(window)
+        window.grab_set()
+        return window
+
+    def choose_background(self):
+        path = filedialog.askopenfilename(parent=self.root, title='背景画像を選択',
+            filetypes=[('画像', '*.png *.jpg *.jpeg *.bmp *.gif *.webp'), ('すべてのファイル', '*.*')])
+        if not path:
+            return
+        try:
+            name = import_background(path, self.settings_path.parent)
+        except (OSError, ValueError) as error:
+            messagebox.showerror('背景画像を読み込めません', str(error), parent=self.root)
+            return
+        if not self._commit_appearance(self.settings.theme_background, self.settings.theme_accent, name):
+            if name != self.settings.background_image:
+                remove_background(name, self.settings_path.parent)
+
+    def reset_background(self):
+        self._commit_appearance(self.settings.theme_background, self.settings.theme_accent, '')
+
+    def reset_appearance(self):
+        self._commit_appearance(DEFAULT_BACKGROUND, DEFAULT_ACCENT, '')
+
+    def _scrolled(self, first, last):
+        self.scrollbar.set(first, last)
+        if self.table.find_withtag('background'):
+            self.table.coords('background', 0, self.table.canvasy(0))
 
     def ensure_loader(self):
         if self.settings.game_directory:
@@ -508,6 +645,12 @@ class Application:
         self.stop_button.configure(state='normal' if ready and requested else 'disabled')
         self.header.delete('all')
         self.table.delete('all')
+        self.background.overlays.clear()
+        c = self.colors
+        width = max(1, self.table.winfo_width())
+        photo = self.background.image(self.table, (width, max(1, self.table.winfo_height())), c[BG])
+        if photo:
+            self.table.create_image(0, self.table.canvasy(0), image=photo, anchor='nw', tags='background')
         size = self.settings.font_size
         if size not in self.fonts:
             self.fonts[size] = (font.Font(self.root, family='Meiryo UI', size=size),
@@ -518,30 +661,36 @@ class Application:
         for key, title, x, end in layout:
             if key == self.sort_key:
                 title += ' ▾' if self.descending else ' ▴'
-            self.header.create_text(x + 6 if key == 'name' else end - 6, 11, text=title, fill=MUTED,
+            self.header.create_text(x + 6 if key == 'name' else end - 6, 11, text=title, fill=c[MUTED],
                                     anchor='w' if key == 'name' else 'e', font=current_font)
-        self.header.create_line(0, 22, self.header.winfo_width(), 22, fill=LINE)
+        self.header.create_line(0, 22, self.header.winfo_width(), 22, fill=c[LINE])
         highest = max((row['damage_dealt'] for row in self.rows), default=1) or 1
         width = self.table.winfo_width()
         for index, row in enumerate(self.rows):
             y = index * self.row_height
             own = row['role'] == 'self' and self.settings.highlight_self
             base = '#102b2d' if own else '#111619' if index % 2 == 0 else BG
-            self.table.create_rectangle(0, y, width, y + self.row_height, fill=base, outline='')
+            def rectangle(end, color, opacity):
+                if photo:
+                    overlay = self.background.overlay(self.table, (max(1, round(end)), self.row_height), color, opacity)
+                    self.table.create_image(0, y, image=overlay, anchor='nw')
+                else:
+                    self.table.create_rectangle(0, y, end, y + self.row_height, fill=color, outline='')
+            rectangle(width, c[base], .25)
             if self.settings.bars and row['damage_dealt']:
-                self.table.create_rectangle(0, y, width * row['damage_dealt'] / highest, y + self.row_height,
-                    fill='#19565a' if own else '#103c40' if row['kind'] == 'player' else '#252c31', outline='')
+                rectangle(width * row['damage_dealt'] / highest,
+                    c['#19565a' if own else '#103c40' if row['kind'] == 'player' else '#252c31'], .50)
             if self.selected == row['key']:
-                self.table.create_rectangle(1, y + 1, width - 1, y + self.row_height - 1, outline='#4a878a')
+                self.table.create_rectangle(1, y + 1, width - 1, y + self.row_height - 1, outline=c['#4a878a'])
             for key, _, x, end in layout:
                 value = row.get(key)
                 text = row['name'] if key == 'name' else f"{row['share']:.1f}" if key == 'share' else str(value) if key == 'attack' else number(value, 1 if key == 'dps' else 0)
                 text = self._elide(text, max(1, end - x - 10), current_font)
                 self.table.create_text(x + 6 if key == 'name' else end - 6, y + self.row_height / 2,
-                    text=text, anchor='w' if key == 'name' else 'e', fill=ACCENT if own and key == 'name' else TEXT,
+                    text=text, anchor='w' if key == 'name' else 'e', fill=c[ACCENT] if own and key == 'name' else c[TEXT],
                     font=bold if own and key == 'name' else current_font)
         if not self.rows and measurement:
-            self.table.create_text(width / 2, 38, text='ダメージを待っています。', fill=MUTED, font=current_font)
+            self.table.create_text(width / 2, 38, text='ダメージを待っています。', fill=c[MUTED], font=current_font)
         self.table.configure(scrollregion=(0, 0, width, len(self.rows) * self.row_height))
         if len(self.rows) * self.row_height > self.table.winfo_height():
             if not self.scrollbar.winfo_manager():
@@ -585,6 +734,7 @@ class Application:
                 detail.window.lift()
             else:
                 self.details[actor['key']] = DetailWindow(self.root, self.report, actor)
+                self._theme_widgets(self.details[actor['key']].window)
 
     def _row_menu(self, event):
         self._select(event)
@@ -592,6 +742,7 @@ class Application:
         menu.add_command(label='攻撃別の詳細', command=self._open_selected)
         menu.add_command(label='一覧をコピー', command=self.copy)
         menu.add_command(label='計測結果をTXTへ保存…', command=self.export_text)
+        self._theme_widgets(menu)
         menu.tk_popup(event.x_root, event.y_root)
 
     def _sort(self, event):
@@ -673,6 +824,7 @@ class Application:
     def open_history(self):
         window = tk.Toplevel(self.root)
         window.title('記録の履歴')
+        window.configure(bg=BG)
         window.geometry('620x300')
         history = list(reversed(self.latest.get('history', [])))
         quest_history = list(reversed(self.latest.get('quest_history', [])))
@@ -686,13 +838,7 @@ class Application:
         history = [{'run_name': entry['label'], 'segment_number': '自動',
                     'roles': entry['report'].get('roles', {}),
                     'capture_path': entry.get('report_path'), 'complete': entry['complete'],
-                    'display_state': {'clear_candidate': 'クリア候補',
-                        'clear_candidate_with_result': '結果受信', 'left_quest_without_clear': '終了未確定',
-                        'failure_return_candidate': '失敗後帰還',
-                        'failure_candidate': '失敗',
-                        'new_world': '次の受注', 'capture_stopped': '停止',
-                        'observation_gap': '観測途切れ',
-                        'outside_interval_ended': '区間外'}.get(entry['report']['quest_measurement']['end_reason'], '計測中'),
+                    'display_state': '待機中' if entry['report']['quest_measurement']['end_reason'] else '計測中',
                     'report': entry['report']} for entry in quest_history] + history
         known = {entry.get('capture_path') for entry in history}
         quest_keys = {history_key(entry.get('report'), entry.get('capture_path')) for entry in history}
@@ -729,10 +875,12 @@ class Application:
             menu = tk.Menu(window, tearoff=False)
             menu.add_command(label='開く', command=lambda: opened(None))
             menu.add_command(label='計測結果をTXTへ保存…', command=lambda: self.export_text(entry=entry, parent=window))
+            self._theme_widgets(menu)
             menu.tk_popup(event.x_root, event.y_root)
         tree.bind('<Button-3>', popup)
         if not history:
             tk.Label(window, text='この監視中に確定した記録はありません。保存ログはメニューから開けます。').pack()
+        self._theme_widgets(window)
 
     def copy(self):
         self.root.clipboard_clear()
@@ -809,6 +957,7 @@ class Application:
             'preparation_error': preparation_error(self.latest),
             'runtime': self.latest.get('runtime'), 'last_error': getattr(self, 'last_error', None)}, ensure_ascii=False, indent=2))
         text.configure(state='disabled')
+        self._theme_widgets(window)
 
     def _drag_start(self, event):
         self.drag = (event.x_root, event.y_root, self.root.winfo_x(), self.root.winfo_y())
@@ -852,4 +1001,13 @@ class Application:
         except OSError:
             pass
         self.backend.close()
+        # Release Tk-owned resources on the UI thread, before a backend thread
+        # could collect a closed window's reference cycle.
+        self.background.photo = None
+        self.background.overlays.clear()
+        self.app_icon = None
+        self.fonts.clear()
+        self.variables.clear()
+        self.column_vars.clear()
+        self.tooltip.theme = None
         self.root.destroy()

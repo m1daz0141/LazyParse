@@ -17,7 +17,7 @@ SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b8612
 # checked offline; live validation is recorded separately in the native profile.
 SUPPORTED_CLASSICS = frozenset({SUPPORTED_CLASSIC,
     'b434e9e245a1ba02a71fefb360c5a25b6063b616a474da4ba0fca4867ad7f3e3'})
-RULE_VERSION = 9
+RULE_VERSION = 10
 TIMED_GAP_FLAGS = {'binding_gap', 'identity_context_binding_reset'}
 # This adjacent pair was observed only for 1132. Other observed return layouts
 # have their own scoped rules; incapacitation alone is not a universal end.
@@ -30,7 +30,11 @@ STORY_DUEL = 939
 CLEAR_PATTERNS = (
     (((0xb, 0x26), 24), ((0xb, 0x11), 48)),
     (((0xb, 0x26), 24), ((0xb, 0x11), 24)),
+    # Black Territory / Floating Facility: complete adjacent success pair.
+    (((0xb, 0x26), 24), ((0xb, 0x11), 36)),
     (((0xb, 0x26), 24), ((0xb, 0x4e), 12), ((0xb, 0x44), 32), ((0xb, 0x11), 72)),
+    # Forest and Dragons: no 0b:44 between the final result notifications.
+    (((0xb, 0x26), 24), ((0xb, 0x4e), 12), ((0xb, 0x11), 72)),
     (((0xb, 0x26), 24), ((0xb, 0xed), 24), ((0xb, 0xf0), 32), ((0xb, 0x11), 24)),
     # Masquerade success also has a 20-byte f0 body without an object spawn.
     # Retain the entire adjacent result sequence, not an arbitrary f0 size.

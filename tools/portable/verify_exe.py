@@ -109,6 +109,12 @@ def main():
     config = launch(app)
     preferences = json.loads((config/'preferences.json').read_text(encoding='utf-8'))
     preferences['font_size'] = 11
+    preferences['theme_background'] = '#182438'
+    preferences['theme_accent'] = '#e8ac68'
+    background = (ROOT / 'tools/gui/assets/icon.png').read_bytes()
+    background_name = 'background-' + hashlib.sha256(background).hexdigest()[:16] + '.png'
+    (config/background_name).write_bytes(background)
+    preferences['background_image'] = background_name
     (config/'preferences.json').write_text(json.dumps(preferences), encoding='utf-8')
     quests = (config/'quests.csv').read_bytes()
     (config/'quests.csv').write_bytes(quests + b'\n# retained edit,,\n')
@@ -116,12 +122,19 @@ def main():
     app.rename(app2)
     config2 = launch(app2)
     assert json.loads((config2/'preferences.json').read_text(encoding='utf-8'))['font_size'] == 11
+    moved_preferences = json.loads((config2/'preferences.json').read_text(encoding='utf-8'))
+    assert moved_preferences['theme_background'] == '#182438'
+    assert moved_preferences['theme_accent'] == '#e8ac68'
+    assert moved_preferences['background_image'] == background_name
+    assert (config2/background_name).read_bytes() == background
+    assert (config2/'licenses/Pillow/LICENSE').is_file()
     assert (config2/'quests.csv').read_bytes() == quests + b'\n# retained edit,,\n'
     proof = {'exe_sha256': hashlib.sha256((app2/'LazyParse.exe').read_bytes()).hexdigest(),
         'application_version': VERSION, 'exe_identity_matched_after_move':True,
         'exe_size': (app2/'LazyParse.exe').stat().st_size, 'python_and_pwsh_absent_from_path': True,
         'unicode_spaces_and_separate_cwd': True, 'relocation_and_edited_settings_preserved': True,
         'gui_smoke_passed_twice': True, 'normal_release_entry_without_test_flags': True,
+        'custom_rgb_and_background_preserved_after_move': True, 'pillow_license_bundled': True,
         'game_folder_touched': False}
     (output / 'verification.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps({'proof': str(output/'verification.json'), **proof}, ensure_ascii=False))

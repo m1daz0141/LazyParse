@@ -38,6 +38,11 @@ distribution = importlib.metadata.distribution('pyinstaller')
 for file in distribution.files:
     if str(file).replace('\\', '/').endswith('.dist-info/licenses/COPYING.txt'):
         resources.append((str(distribution.locate_file(file)), 'licenses/PyInstaller'))
+
+distribution = importlib.metadata.distribution('Pillow')
+for file in distribution.files:
+    if '.dist-info/licenses/' in str(file).replace('\\', '/'):
+        resources.append((str(distribution.locate_file(file)), 'licenses/Pillow'))
 a = Analysis([str(root / 'tools/portable/entry.py')], pathex=[str(root)],
     binaries=[], datas=[(str(root / source), destination) for source, destination in resources],
     hiddenimports=[], hookspath=[], hooksconfig={}, runtime_hooks=[],

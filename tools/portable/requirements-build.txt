@@ -1,4 +1,5 @@
 PyInstaller==6.22.3
+-r ../gui/requirements.txt
 pyinstaller-hooks-contrib==2026.9
 altgraph==0.17.5
 packaging==26.3

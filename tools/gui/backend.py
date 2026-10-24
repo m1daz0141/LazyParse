@@ -293,7 +293,7 @@ class Backend:
             return
         if action in {'AutoOn', 'AutoOff'}:
             self.auto_quests = action == 'AutoOn'
-            self.events.put({'type': 'success', 'message': 'クエスト自動計測（試験中）を' +
+            self.events.put({'type': 'success', 'message': 'クエスト自動計測を' +
                              ('有効' if self.auto_quests else '無効') + 'にしました。'})
             return
         if action == 'Open':

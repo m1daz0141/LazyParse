@@ -6,6 +6,7 @@ import re
 from .viewmodel import DEFAULT_COLUMNS, COLUMNS
 from .timing import DPS_MODES
 from ..paths import CONFIG
+from .appearance import DEFAULT_BACKGROUND, DEFAULT_ACCENT, valid_color, BACKGROUND_NAME
 
 STATE = CONFIG
 
@@ -25,6 +26,9 @@ class Settings:
     time_decimals: bool = True
     auto_text_export: bool = False
     game_directory: str = ''
+    theme_background: str = DEFAULT_BACKGROUND
+    theme_accent: str = DEFAULT_ACCENT
+    background_image: str = ''
     font_size: int = 9
     interval: float = 0.5
     columns: list = field(default_factory=lambda: DEFAULT_COLUMNS.copy())
@@ -43,6 +47,12 @@ class Settings:
                 result.dps_mode = values['dps_mode']
             if isinstance(values.get('game_directory'), str):
                 result.game_directory = values['game_directory']
+            for name in ('theme_background', 'theme_accent'):
+                if valid_color(values.get(name)):
+                    setattr(result, name, values[name].lower())
+            name = values.get('background_image')
+            if isinstance(name, str) and (not name or BACKGROUND_NAME.fullmatch(name)):
+                result.background_image = name
             if re.fullmatch(r'[0-9]{3,4}x[0-9]{3,4}[+-][0-9]{1,5}[+-][0-9]{1,5}', str(values.get('geometry', ''))):
                 result.geometry = values['geometry']
             for name, low, high in [('opacity', 0.3, 1), ('font_size', 8, 16), ('interval', 0.1, 3)]:

@@ -141,8 +141,7 @@ def rate_tooltip(row, metric):
 
 def status_view(snapshot, *, saved=False):
     if saved:
-        quest = (snapshot.get('measurement') or {}).get('report', {}).get('quest_measurement')
-        return ('保存ログ・自動判定（試験中）' if quest else '保存ログ'), '#c5ac73'
+        return '保存ログ', '#c5ac73'
     if snapshot.get('game_version_error'):
         return 'ゲームDLLの確認が必要', '#ef8b87'
     if preparation_error(snapshot):
@@ -154,12 +153,7 @@ def status_view(snapshot, *, saved=False):
         if quest:
             if quest.get('rules_suspended'):
                 return '自動判定保留・記録中', '#ddb577'
-            reason = quest.get('end_reason')
-            label = ('クリア候補・次を待機' if reason in {'clear_candidate', 'clear_candidate_with_result'} else
-                     '失敗・次を待機' if reason == 'failure_candidate' else
-                     '失敗後帰還・次を待機' if reason == 'failure_return_candidate' else
-                     '次のクエスト待機' if reason else 'クエスト計測中')
-            return label + '（試験中）', '#69c9b0'
+            return ('待機中' if quest.get('end_reason') else '計測中'), '#69c9b0'
         if snapshot.get('auto_quests_enabled'):
             view = snapshot.get('quest_view') or {}
             if not view.get('supported'):
@@ -167,21 +161,15 @@ def status_view(snapshot, *, saved=False):
             if view.get('suspended'):
                 return '自動判定保留・記録中', '#ddb577'
             counts = included_totals((snapshot.get('measurement') or {}).get('report', {}))
-            return ('クエスト不明・記録中' if counts.get('positive_records') else
-                    'クエスト待機（試験中）'), '#ddb577'
-        active = (snapshot.get('measurement') or {}).get('activity', {}).get('active', False)
-        return ('記録中 · 戦闘中' if active else '記録中'), '#69c9b0'
+            return ('計測中' if counts.get('positive_records') else '待機中'), '#69c9b0'
+        return '計測中', '#69c9b0'
     state = snapshot.get('state')
     if state == 'paused':
-        return '停止中', '#c5ac73'
+        return '待機中', '#c5ac73'
     if state == 'binding_ready_waiting_for_start':
-        return '記録待機', '#82aeb6'
+        return '待機中', '#82aeb6'
     if state in {'read_error', 'writer_error', 'identity_context_error', 'capture_start_failed'}:
         return '取得エラー', '#ef8b87'
     if state in {'stale', 'identity_unavailable', 'waiting_for_binding', 'waiting_for_publication'}:
         return '取得確認中', '#ddb577'
-    if snapshot.get('measurement'):
-        if snapshot['measurement'].get('quest_id'):
-            return '前回のクエスト（試験中）', '#a4acb2'
-        return '前回の記録', '#a4acb2'
-    return 'データ待ち', '#a4acb2'
+    return '待機中', '#a4acb2'

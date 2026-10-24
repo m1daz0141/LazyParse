@@ -24,6 +24,12 @@ The optional Windows executable bundles CPython, Tcl/Tk and a PyInstaller bootlo
 
 Sources: https://docs.python.org/3/license.html, https://www.tcl-lang.org/software/tcltk/license.html, https://pyinstaller.org/en/stable/license.html
 
+## Background image support
+
+Pillow is used locally to decode, resize and display user-selected background images. Its MIT-CMU license and bundled third-party notices are included under `config/licenses/Pillow/` in the executable distribution. User-selected images are not included in the application distribution.
+
+Source: https://github.com/python-pillow/Pillow
+
 ## Original OverParse application
 
 The original WPF application, project files, artwork, old CSV prototype, and original JA-exclusion resource are not part of the current distribution. The local research checkout retains the original MIT notice with those source files. Their license has not been changed. Historical commits retain their original contents and notices.

@@ -58,9 +58,10 @@ class ScopedQuestTests(unittest.TestCase):
                 s.update(ids(quest, tail), events([(1, 200, packet(value=100))]), 1200)
                 self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
 
-    def test_complete24_and48_pairs_shared_but_other_sizes_rejected(self):
+    def test_complete24_36_and48_pairs_shared_but_other_sizes_rejected(self):
         for quest, size, expected in [(939, 24, True), (475, 24, True), (1025, 24, True),
-                                       (939, 48, True), (475, 48, True), (475, 36, False)]:
+                                       (939, 48, True), (475, 48, True), (475, 36, True),
+                                       (475, 32, False), (1021, 72, False)]:
             with self.subTest(quest=quest, size=size):
                 s = session()
                 s.update(ids(quest, [notice(4, 800, 0xb, 0x26, 24), notice(5, 801, 0xb, 0x11, size)]),
@@ -150,7 +151,7 @@ class ScopedQuestTests(unittest.TestCase):
         self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
 
 
-CAPTURE = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic-auto-fixture-007/run-100000000000000010-1-0/segment-000001/capture.opcap'
+CAPTURE = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic-auto-fixture-001/run-100000000000000001-1-0/segment-000001/capture.opcap'
 
 
 @unittest.skipUnless(CAPTURE.exists(), 'private multi-quest lifecycle recording required')

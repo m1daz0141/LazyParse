@@ -2,3 +2,7 @@
 *.py text eol=lf
 *.ps1 text eol=crlf
 tools/attack_catalog/data/skills_ja.csv -text
+
+# Preserve the user-supplied README bytes.
+README.md -text
+.githooks/* text eol=lf

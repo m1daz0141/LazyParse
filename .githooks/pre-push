@@ -1,0 +1,12 @@
+#!/bin/sh
+remote_url=$2
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+    if [ -n "$LAZYPARSE_PYTHON" ]; then
+        "$LAZYPARSE_PYTHON" tools/release/check_full_variant.py --revision "$local_sha" --remote "$remote_url" || exit 1
+    elif command -v py >/dev/null 2>&1; then
+        py -3 tools/release/check_full_variant.py --revision "$local_sha" --remote "$remote_url" || exit 1
+    else
+        python tools/release/check_full_variant.py --revision "$local_sha" --remote "$remote_url" || exit 1
+    fi
+done

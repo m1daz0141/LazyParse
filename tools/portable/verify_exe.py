@@ -16,7 +16,7 @@ from ..version import VERSION
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def close_verified_window(process, executable):
+def close_verified_window(process, executable, *, title=None):
     """Exercise the regular release entry; close only our isolated exe's GUI."""
     user = ctypes.WinDLL('user32', use_last_error=True)
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -39,9 +39,9 @@ def close_verified_window(process, executable):
         def inspect(handle, _):
             if not user.IsWindowVisible(handle):
                 return True
-            title = ctypes.create_unicode_buffer(256)
-            user.GetWindowTextW(handle, title, len(title))
-            if title.value != 'LazyParse ' + VERSION:
+            window_title = ctypes.create_unicode_buffer(256)
+            user.GetWindowTextW(handle, window_title, len(window_title))
+            if window_title.value != (title or 'LazyParse ' + VERSION):
                 return True
             pid = wintypes.DWORD()
             user.GetWindowThreadProcessId(handle, ctypes.byref(pid))

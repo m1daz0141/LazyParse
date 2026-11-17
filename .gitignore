@@ -52,3 +52,8 @@ HANDOFF.md
 /Quest.csv
 /QuestNames.csv
 /QuestCatalog.csv
+
+# Only the supplied root README is public documentation.
+*.md
+!/README.md
+limit-bin/

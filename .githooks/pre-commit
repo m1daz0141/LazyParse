@@ -1,0 +1,8 @@
+#!/bin/sh
+if [ -n "$LAZYPARSE_PYTHON" ]; then
+    exec "$LAZYPARSE_PYTHON" tools/release/check_full_variant.py
+elif command -v py >/dev/null 2>&1; then
+    exec py -3 tools/release/check_full_variant.py
+else
+    exec python tools/release/check_full_variant.py
+fi

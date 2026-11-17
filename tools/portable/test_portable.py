@@ -14,6 +14,12 @@ from .. import paths
 
 
 class PortableTests(unittest.TestCase):
+    def setUp(self):
+        # General deployment tests never request UAC or mutate fixture ACLs.
+        acl_patch = patch('tools.portable.deployment.grant_sub_access')
+        self.acl = acl_patch.start()
+        self.addCleanup(acl_patch.stop)
+
     def fixture(self, root):
         resources = root / 'resources'
         resources.mkdir()
@@ -73,7 +79,10 @@ class PortableTests(unittest.TestCase):
             with patch('tools.portable.deployment.hashlib.file_digest', wraps=__import__('hashlib').file_digest) as hashing:
                 d.verify_game(folder, force=False)
                 hashing.assert_not_called()
+                previous = (folder/'pso2classic.dll').stat()
                 (folder/'pso2classic.dll').write_bytes(b'updated')
+                # Equal-sized fixture writes can share a Windows timestamp tick.
+                os.utime(folder/'pso2classic.dll', ns=(previous.st_atime_ns, previous.st_mtime_ns + 1_000_000_000))
                 with self.assertRaises(GameVersionMismatch):
                     d.verify_game(folder, force=False)
                 self.assertEqual(hashing.call_count, 2)
@@ -181,6 +190,66 @@ class PortableTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     d.install(folder)
             self.assertEqual((folder / 'eos_gaming.dll').read_bytes(), old)
+
+    def test_acl_finishes_before_any_game_directory_write_and_runs_on_reinstall(self):
+        with tempfile.TemporaryDirectory() as work:
+            d, folder = self.fixture(Path(work))
+            target = folder / 'eos_gaming.dll'
+            def grant(path):
+                self.assertEqual(path, folder.resolve())
+                self.assertFalse(list(folder.glob('LazyParse-*.tmp')))
+                self.assertEqual(target.exists(), self.acl.call_count > 1)
+            self.acl.side_effect = grant
+            d.install(folder)
+            d.install(folder)
+            self.assertEqual(self.acl.call_count, 2)
+
+    def test_acl_failure_or_uac_cancel_preserves_existing_loader_and_ledger(self):
+        with tempfile.TemporaryDirectory() as work:
+            d, folder = self.fixture(Path(work))
+            target = folder / 'eos_gaming.dll'
+            for installed in (False, True):
+                if installed:
+                    self.acl.side_effect = None
+                    d.install(folder)
+                old = target.read_bytes() if installed else None
+                ledger = d.record.read_bytes() if installed else None
+                for error in (OSError('ACL failed'), ValueError('UAC cancelled')):
+                    self.acl.side_effect = error
+                    with self.assertRaises(type(error)):
+                        d.install(folder)
+                    self.assertEqual(target.read_bytes() if target.exists() else None, old)
+                    self.assertEqual(d.record.read_bytes() if d.record.exists() else None, ledger)
+                    self.assertFalse(list(folder.glob('LazyParse-*.tmp')))
+
+    def test_game_start_or_update_during_acl_blocks_dll_write(self):
+        with tempfile.TemporaryDirectory() as work:
+            d, folder = self.fixture(Path(work))
+            def game_starts(_):
+                d.running = lambda: True
+            self.acl.side_effect = game_starts
+            with self.assertRaises(ValueError):
+                d.install(folder)
+            self.assertFalse((folder / 'eos_gaming.dll').exists())
+            d.running = lambda: False
+            self.acl.side_effect = lambda _: (folder/'pso2bridge.dll').write_bytes(b'update')
+            with self.assertRaises(GameVersionMismatch):
+                d.install(folder)
+            self.assertFalse((folder / 'eos_gaming.dll').exists())
+
+    def test_rejected_foreign_dll_and_game_version_do_not_change_acl(self):
+        with tempfile.TemporaryDirectory() as work:
+            d, folder = self.fixture(Path(work))
+            target = folder / 'eos_gaming.dll'
+            target.write_bytes(b'foreign')
+            with self.assertRaises(ValueError):
+                d.install(folder)
+            self.acl.assert_not_called()
+            target.unlink()
+            (folder/'pso2classic.dll').write_bytes(b'update')
+            with self.assertRaises(GameVersionMismatch):
+                d.install(folder)
+            self.acl.assert_not_called()
 
     def test_relocation_rewrites_only_owned_loader_and_config_is_not_reset(self):
         with tempfile.TemporaryDirectory() as work:

@@ -27,7 +27,7 @@ resources = [
     ('tools/portable/bin/Loader.dll', 'tools/portable/bin'),
     ('License', 'licenses/LazyParse'),
     ('COPYRIGHT', 'licenses/LazyParse'),
-    ('THIRD_PARTY_NOTICES.md', 'licenses'),
+    ('THIRD_PARTY_NOTICES', 'licenses'),
 ]
 if (root / 'tools/combat_core/ja_exclusions.local.csv').is_file():
     resources.append(('tools/combat_core/ja_exclusions.local.csv', 'tools/combat_core'))

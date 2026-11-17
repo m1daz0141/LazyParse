@@ -10,6 +10,7 @@ import uuid
 
 from ..paths import HOME, BUNDLE
 from .files import atomic_json, exclusive_file
+from .acl import grant_sub_access
 from ..version import VERSION
 
 RESOURCES = BUNDLE / 'tools/portable/bin'
@@ -202,6 +203,13 @@ class Deployment:
             loader = Path(self.build['loader']).read_bytes()
             if digest(loader) != self.build['loader_sha256']:
                 raise ValueError('展開したローダーが変更されています。')
+            if self.running():
+                raise ValueError('PSO2を通常終了してからDLLを配置してください。')
+            grant_sub_access(folder)
+            # UAC and recursive ACL updates can take time. Recheck before writing.
+            if self.running():
+                raise ValueError('アクセス権変更中にPSO2が起動したため、DLL配置を中止')
+            self.verify_game(folder)
             temporary = target.with_name('LazyParse-' + uuid.uuid4().hex + '.tmp')
             try:
                 temporary.write_bytes(loader)

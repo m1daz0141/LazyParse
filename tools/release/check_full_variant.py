@@ -5,8 +5,8 @@ import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
-EXPECTED = {'https://github.com/m1daz0141/LazyParse-Full.git',
-            'git@github.com:m1daz0141/LazyParse-Full.git'}
+EXPECTED = {'https://github.com/m1daz0141/LazyParse.git',
+            'git@github.com:m1daz0141/LazyParse.git'}
 SELF = 'tools/release/check_full_variant.py'
 DENIED_PATH = re.compile(r'(?:^|/)(?:limited[^/]*|limit_main\.py|limit_entry\.py|limit_test_host\.c|'
                          r'memory_stream\.py|test_limited\.py|verify_limit_exe\.py|build_limit_native\.ps1|'
@@ -26,7 +26,7 @@ def main():
     args = parser.parse_args()
     remote = args.remote or git('remote', 'get-url', '--push', 'origin').decode().strip()
     if remote not in EXPECTED:
-        raise SystemExit('Full publication rejected: remote must be LazyParse-Full')
+        raise SystemExit('Full publication rejected: remote must be LazyParse')
     prefix = args.revision + ':' if args.revision else ':'
     names = (git('ls-tree', '-r', '--name-only', '-z', args.revision) if args.revision else
              git('diff', '--cached', '--name-only', '--diff-filter=ACMRT', '-z'))

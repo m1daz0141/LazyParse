@@ -14,8 +14,6 @@
 
 PSO2 (Classic) 用ダメージパーサー、つまるところ OverParse リスペクトです  
 AI-slop なんで Lazy  
-ゲームクライアントが受信したデータを横から見てる  
-ゲームサーバや外部とのデータ送受信はありません
 
 ## 動作範囲
 
@@ -43,7 +41,6 @@ Due to technical limitations, the Epic Games version cannot be used. I don't kno
 自動テキスト記録もここから
 
 あとはメニューみて  
-いったん他人のDPSは基本的に見えません。総ダメージ+自分が占めるダメージ割合のみ
 
 ## よくある質問を先回りする
 

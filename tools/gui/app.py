@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import time
 import tkinter as tk
 from tkinter import filedialog, font, ttk, messagebox, colorchooser
 
@@ -57,12 +58,13 @@ class Tooltip:
 class DetailWindow:
     def __init__(self, parent, report, actor):
         self.window = tk.Toplevel(parent)
+        self.window.withdraw()
         self.window.title(actor['name'] + ' — LazyParse')
         self.window.geometry('1040x355')
         self.window.configure(bg=BG)
         self.label = tk.Label(self.window, bg=BG, fg=TEXT, anchor='w', padx=10, pady=9, font=('Meiryo UI', 10))
         self.label.pack(fill='x')
-        notebook = ttk.Notebook(self.window)
+        notebook = self.notebook = ttk.Notebook(self.window)
         notebook.pack(fill='both', expand=True, padx=8, pady=(0, 8))
         self.attacks = self._table(notebook, '攻撃別', [('name', 'Attack', 205), ('id', 'Attack ID', 112),
             ('kind', '種別', 70), ('damage', 'Damage', 95), ('share', '%', 58), ('hits', 'Hits', 55),
@@ -75,10 +77,12 @@ class DetailWindow:
                             font=('Consolas', 9), wrap='word')
         self.info.pack(fill='both', expand=True)
         self.refresh(report, actor)
+        notebook.select(self.attacks.master)
+        self.window.update_idletasks()
+        self.window.deiconify()
 
     def _table(self, notebook, title, columns):
         frame = tk.Frame(notebook, bg=BG)
-        notebook.add(frame, text=title)
         tree = ttk.Treeview(frame, columns=[key for key, _, _ in columns], show='headings', style='LazyParse.Treeview')
         for key, name, width in columns:
             tree.heading(key, text=name)
@@ -87,6 +91,7 @@ class DetailWindow:
         tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
         tree.pack(fill='both', expand=True)
+        notebook.add(frame, text=title)
         return tree
 
     def refresh(self, report, actor):
@@ -133,6 +138,8 @@ class Application:
         self.latest = {}
         self.saved = None
         self.snapshot = {}
+        self.live_update_pending = False
+        self.last_live_display = None
         self.rows = []
         self.report = {}
         self.selected = None
@@ -261,20 +268,17 @@ class Application:
         self.logging_menu = logging
         logging.add_command(label='記録開始', command=lambda: self.command('Start'))
         logging.add_command(label='記録停止', command=lambda: self.command('Stop'))
-        self._check(logging, 'クエストごとに自動計測', 'auto_quests')
-        self._check(logging, 'Timeを小数点まで表示', 'time_decimals')
-        self._check(logging, '計測終了時にTXTを自動出力', 'auto_text_export')
         logging.add_separator()
         logging.add_command(label='保存して次の計測へ', accelerator='Ctrl+Shift+E', command=lambda: self.command('Next'))
         logging.add_command(label='新しい計測へリセット', accelerator='Ctrl+Shift+R', command=lambda: self.command('Reset'))
         logging.add_separator()
         logging.add_command(label='取得を終了', command=lambda: self.command('Shutdown'))
-        self.dps_menu = self._menu('DPS')
+        parsing = self.parsing_menu = self._menu('解析')
         self.variables['dps_mode'] = tk.StringVar(value=self.settings.dps_mode)
-        for mode, label in [('quest', 'クエスト中'), ('damage', 'ダメージ計測')]:
-            self.dps_menu.add_radiobutton(label=label, value=mode, variable=self.variables['dps_mode'],
-                                         command=lambda mode=mode: self.set_dps_mode(mode))
-        parsing = self._menu('解析')
+        for mode, label in [('quest', 'DPS：クエスト全体表示'), ('damage', 'DPS：総ダメージ基準表示')]:
+            parsing.add_radiobutton(label=label, value=mode, variable=self.variables['dps_mode'],
+                                   command=lambda mode=mode: self.set_dps_mode(mode))
+        parsing.add_separator()
         self._check(parsing, 'プレイヤーのみ表示', 'players_only')
         self._check(parsing, '自分のみ表示', 'only_me')
         self._check(parsing, '人物名を匿名表示', 'anonymize')
@@ -285,9 +289,13 @@ class Application:
         parsing.add_command(label='攻撃名CSVを再読込', command=self.reload_attack_names)
         parsing.add_command(label='クエスト名CSVを開く', command=self.open_quest_csv)
         parsing.add_command(label='クエスト名CSVを再読込', command=self.reload_quest_names)
-        setup = self._menu('設定')
+        setup = self.setup_menu = self._menu('設定')
         setup.add_command(label='PSO2フォルダーを選択・DLLを配置…', command=self.choose_game_folder)
         setup.add_command(label='追加したDLLを撤去', command=self.remove_loader)
+        setup.add_separator()
+        self._check(setup, 'クエスト毎に自動計測', 'auto_quests')
+        self._check(setup, 'Timeを小数点まで表示', 'time_decimals')
+        self._check(setup, '計測終了後にTXTを自動出力', 'auto_text_export')
         display = self._menu('表示')
         self._check(display, '常に手前に表示', 'topmost')
         self._check(display, 'ダメージバー', 'bars')
@@ -316,9 +324,10 @@ class Application:
             sizes.add_command(label=str(value), command=lambda value=value: self.set_font(value))
         display.add_command(label='ウィンドウサイズを戻す', command=lambda: self.root.geometry('670x275'))
         logs = self._menu('ログ')
-        logs.add_command(label='保存ログを開く…', command=self.open_log)
-        logs.add_command(label='最新の状態へ戻る', command=self.follow_live)
         logs.add_command(label='履歴から開く…', command=self.open_history)
+        logs.add_command(label='保存ログを開く…', command=self.open_log)
+        logs.add_separator()
+        logs.add_command(label='最新の状態へ戻る', command=self.follow_live)
         logs.add_separator()
         logs.add_command(label='一覧をコピー', accelerator='Ctrl+C', command=self.copy)
         logs.add_command(label='集計をJSONへ保存…', command=self.export)
@@ -542,7 +551,7 @@ class Application:
         changed = False
         try:
             self.latest = self.backend.updates.get_nowait()
-            changed = self.saved is None
+            self.live_update_pending = self.saved is None
         except queue.Empty:
             pass
         while True:
@@ -580,15 +589,34 @@ class Application:
                     self.last_error = event['message']
                     if event.get('loader_action'):
                         messagebox.showerror('取得DLLの配置を確認してください', event['message'], parent=self.root)
-        if changed:
+        if self.live_update_pending and self.saved is None:
             startup_error = preparation_error(self.latest)
             if startup_error and startup_error != self.last_preparation_error:
                 self.last_error = startup_error
                 self.notify(startup_error)
+                changed = True
             self.last_preparation_error = startup_error
+            now = time.monotonic()
+            if (changed or self.settings.time_decimals or self.last_live_display is None or
+                    now - self.last_live_display >= 1 or
+                    self._display_state(self.latest) != self._display_state(self.snapshot)):
+                self.last_live_display = now
+                self.live_update_pending = False
+                changed = True
+        if changed:
             self.snapshot = self.saved if self.saved is not None else self.latest
             self.render()
         self.consume_timer = self.root.after(100, self._consume)
+
+    @staticmethod
+    def _display_state(snapshot):
+        measurement = snapshot.get('measurement') or {}
+        report = measurement.get('report') or {}
+        quest = report.get('quest_measurement') or {}
+        return (status_view(snapshot), snapshot.get('state'), snapshot.get('effective_recording'),
+                snapshot.get('worker_verified'), snapshot.get('heartbeat_fresh'),
+                measurement.get('capture_path'), measurement.get('quest_id'), measurement.get('complete'),
+                report.get('stopped'), quest.get('id'), quest.get('end_reason'))
 
     def notify(self, text):
         self.notice = text

@@ -1,6 +1,5 @@
 from dataclasses import asdict, dataclass, field
 import json
-from pathlib import Path
 import re
 
 from .viewmodel import DEFAULT_COLUMNS, COLUMNS
@@ -23,8 +22,8 @@ class Settings:
     highlight_self: bool = True
     auto_quests: bool = True
     dps_mode: str = 'quest'
-    time_decimals: bool = True
-    auto_text_export: bool = False
+    time_decimals: bool = False
+    auto_text_export: bool = True
     game_directory: str = ''
     theme_background: str = DEFAULT_BACKGROUND
     theme_accent: str = DEFAULT_ACCENT

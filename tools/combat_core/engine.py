@@ -7,7 +7,7 @@ import math
 from .model import IdentityRegistry
 from .hit_flags import read_ja_exclusions
 from .hit_rates import HitRates, classify_hit, rate_policy
-from .damage_policy import BURN_ATTACK_IDS, SOURCE_ZERO_BURN, exclusion_reason
+from .damage_policy import BURN_ATTACK_IDS, SOURCE_ZERO_BURN, ZERO_ATTACK_ID, exclusion_reason
 from ..attack_catalog.catalog import get_catalog, with_attack_names
 
 
@@ -302,7 +302,8 @@ class CombatEngine:
                 "hit_rate_policy": rate_policy(self.ja_ignore_metadata),
                 "aggregation_policy": {"non_positive_values": "excluded_before_aggregation",
                     "negative_value_classification": "healing_candidate", "raw_signed_values_preserved": True,
-                    "zero_attack_positive_values": "included_with_quality_flag",
+                    "zero_attack_positive_values": "excluded_before_aggregation",
+                    "zero_attack_exclusion_reason": ZERO_ATTACK_ID,
                     "source_zero_burn": "excluded_before_aggregation",
                     "source_zero_burn_ids": sorted(BURN_ATTACK_IDS),
                     "source_zero_burn_exclusion_reason": SOURCE_ZERO_BURN,

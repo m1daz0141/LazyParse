@@ -37,9 +37,9 @@ class RateTests(unittest.TestCase):
         own = report['roles']['self']
         counts = own['hit_rates']
         self.assertEqual((counts['ja_hits'], counts['ja_eligible_hits'], counts['ja_percent']), (1, 2, 50))
-        self.assertEqual((counts['ja_excluded_hits'], counts['ja_unknown_hits']), (3, 1))
-        self.assertEqual((counts['crit_hits'], counts['crit_eligible_hits']), (5, 6))
-        self.assertEqual((own['damage_dealt'], own['max_hit'], own['damage_taken']), (1400, 900, 100))
+        self.assertEqual((counts['ja_excluded_hits'], counts['ja_unknown_hits']), (3, 0))
+        self.assertEqual((counts['crit_hits'], counts['crit_eligible_hits']), (4, 5))
+        self.assertEqual((own['damage_dealt'], own['max_hit'], own['damage_taken']), (1300, 900, 100))
         self.assertEqual(audit[2]['hit_flags']['ja_scope_reason'], 'pet_has_no_ja')
         self.assertIsNone(audit[2]['hit_flags']['ja'])
         self.assertTrue(audit[2]['ownership_applied'])

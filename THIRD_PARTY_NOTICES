@@ -6,11 +6,11 @@ Copyright (C) 2026 m1daz0141. LazyParse original source code and documentation a
 
 ## Attack-name data
 
-`tools/attack_catalog/data/skills_ja.csv` is retained from Remon-7L/Remon-7L.github.io at the pinned commit in `tools/attack_catalog/data/source.json`. `tools/attack_catalog/skills.csv` supplies initial defaults for the editable `config/skills.csv` beside the executable.
+`tools/attack_catalog/skills.csv` supplies initial defaults for the editable `config/skills.csv` beside the executable. Runtime attack-name lookup reads only `config/skills.csv`.
 
-The upstream repository currently reports no detected license, and no license file or data-specific permission notice was found at the pinned commit. The recorded license remains `null`. This project does not assert its MIT License over that third-party data. Its source, hash, and recorded permission status are preserved; permission terms remain an unresolved upstream question.
+Remon-7L/Remon-7L.github.io was used as a historical reference for the attack-name data. Its original CSV and source manifest are not included in the current distribution. This project does not assert its MIT License over third-party CSV data.
 
-Source: https://github.com/Remon-7L/Remon-7L.github.io
+Reference: https://github.com/Remon-7L/Remon-7L.github.io
 
 ## MinHook and its included disassembler
 

@@ -18,7 +18,7 @@ SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b8612
 SUPPORTED_CLASSICS = frozenset({SUPPORTED_CLASSIC,
     'b434e9e245a1ba02a71fefb360c5a25b6063b616a474da4ba0fca4867ad7f3e3',
     'dd25110b8c1e7e788a4df5d329567bedd21cefcf5e87379ba0076ae055464f03'})
-RULE_VERSION = 10
+RULE_VERSION = 11
 TIMED_GAP_FLAGS = {'binding_gap', 'identity_context_binding_reset'}
 # This adjacent pair was observed only for 1132. Other observed return layouts
 # have their own scoped rules; incapacitation alone is not a universal end.

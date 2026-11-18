@@ -35,7 +35,7 @@ def filename(report, *, now=None):
     stamp = (measurement_date(report) or now or datetime.now(JST)).astimezone(JST)
     label = quest_label(report)
     label = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', label).rstrip(' .')[:90] or 'Unknown'
-    kind = f'({label})' if (report.get('quest_measurement') or {}).get('kind') == 'quest' else 'Manual'
+    kind = label if (report.get('quest_measurement') or {}).get('kind') == 'quest' else 'Manual'
     return f'LazyParse_{kind}_{stamp:%Y-%m-%d_%H-%M-%S}.txt'
 
 

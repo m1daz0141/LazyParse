@@ -87,7 +87,7 @@ class TextExportTests(unittest.TestCase):
         r = report()
         self.assertEqual(filename(r), 'LazyParse_Manual_2026-10-18_14-40-01.txt')
         q = quest_report()
-        self.assertEqual(filename(q), 'LazyParse_(領域調査：異世界の残滓)_2026-10-18_14-40-01.txt')
+        self.assertEqual(filename(q), 'LazyParse_領域調査：異世界の残滓_2026-10-18_14-40-01.txt')
         q['quest_measurement']['quest_candidate'] = 999
         self.assertIn('不明クエスト（ID_ 999）', filename(q))
         q['quest_measurement']['quest_candidate'] = 7
@@ -162,7 +162,7 @@ class TextExportTests(unittest.TestCase):
                 b._poll()
                 files = list(Path(work).glob('*.txt'))
                 self.assertEqual(len(files), 1)
-                self.assertIn('(領域調査：異世界の残滓)' if auto else 'Manual', files[0].name)
+                self.assertIn('領域調査：異世界の残滓' if auto else 'Manual', files[0].name)
                 b._poll()
                 self.assertEqual(len(list(Path(work).glob('*.txt'))), 1)
                 self.assertTrue(b.requests.empty())
@@ -203,10 +203,11 @@ class TextExportTests(unittest.TestCase):
     def test_preferences_persist_automatic_export_but_reject_string_boolean(self):
         with tempfile.TemporaryDirectory() as work:
             path = Path(work) / 'prefs.json'
-            Settings(auto_text_export=True).save(path)
             self.assertTrue(Settings.load(path).auto_text_export)
-            path.write_text('{"schema_version":1,"auto_text_export":"true"}')
+            Settings(auto_text_export=False).save(path)
             self.assertFalse(Settings.load(path).auto_text_export)
+            path.write_text('{"schema_version":1,"auto_text_export":"true"}')
+            self.assertTrue(Settings.load(path).auto_text_export)
 
     def test_history_prefers_corrected_rule_even_if_old_ordinal_id_and_counts_differ(self):
         with tempfile.TemporaryDirectory() as work:

@@ -4,7 +4,6 @@ from pathlib import Path
 import struct
 import unittest
 
-from .metadata import IdentityEvent
 from .quests import QuestSession, SUPPORTED_CLASSIC
 from .quest_replay import replay_quests
 from .test_quests import fixture, level, notice, transfer, campship_exit
@@ -225,7 +224,7 @@ RUN = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic-aut
 class SuccessfulRecordingTests(unittest.TestCase):
     def test_real_successes_freeze_before_return_and_preserve_every_record(self):
         expected = {1: {1132: (101896060272, 66093158)},
-                    2: {1130: (106339466056, 25670684), 1023: (109930989094, 13788944)},
+                    2: {1130: (106339466056, 25670684), 1023: (109930989094, 13788911)},
                     3: {1005: (117361141362, 20164526)}}
         for segment, quests in expected.items():
             result = replay_quests(RUN / f'segment-{segment:06d}/capture.opcap')

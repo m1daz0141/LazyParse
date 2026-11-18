@@ -461,11 +461,11 @@ class LateGapLiveRegressionTests(PinnedLiveTest):
         quests = [r for r in view['history'] if r['quest_measurement']['kind'] == 'quest']
         self.assertEqual(len(quests), 2)
         first, second = quests
-        self.assertEqual(first['roles']['self']['damage_dealt'], 35180343)
+        self.assertEqual(first['roles']['self']['damage_dealt'], 35180334)
         self.assertEqual(first['timing']['elapsed_seconds'], 503.6025999)
         self.assertFalse(first['quest_measurement']['rules_suspended'])
         self.assertEqual(second['quest_measurement']['end_reason'], 'observation_gap')
-        self.assertEqual(second['roles']['self']['damage_dealt'], 30041124)
+        self.assertEqual(second['roles']['self']['damage_dealt'], 30041098)
         self.assertTrue(second['quest_measurement']['rules_suspended'])
 
 
@@ -483,14 +483,16 @@ class LiveQuestRegressionTests(PinnedLiveTest):
         self.assertEqual(view['outside_records'], 2)
         self.assertTrue(all('sequence_gap' not in r['quality']['flags'] for r in view['history']))
         quests = [r for r in view['history'] if r['quest_measurement']['kind'] == 'quest']
-        self.assertEqual([r['roles']['self']['damage_dealt'] for r in quests], [36865123, 3139428])
+        self.assertEqual([r['roles']['self']['damage_dealt'] for r in quests], [36865099, 3139428])
         self.assertEqual(quests[0]['timing']['elapsed_seconds'], 673.7316882)
         self.assertEqual(quests[0]['quest_measurement']['result_qpc'], 282193638538)
         for index, report in enumerate(quests, 1):
             diagnostic = CAPTURE.parents[3] / 'quest-live-20261019-165142-5ae3b2ee' / f'attempt-{index}-candidate-report.json'
             if diagnostic.exists():
                 expected = json.loads(diagnostic.read_text(encoding='utf-8'))
-                self.assertEqual(report['roles'], expected['roles'])
+                expected_sum = expected.get('damage_totals', expected['counts'])['positive_sum']
+                zero_sum = sum(a['damage_dealt'] for a in expected['attacks'] if a['attack_id'] == 0)
+                self.assertEqual(report['damage_totals']['positive_sum'], expected_sum - zero_sum)
                 self.assertEqual(report['counts'], expected['counts'])
 
     def test_gui_auto_save_is_idempotent_openable_and_never_sends_capture_commands(self):

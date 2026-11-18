@@ -163,10 +163,10 @@ class RealQuestVariantTests(unittest.TestCase):
         self.assertEqual(view['outside_records'], 4)
         expected = [(1130, 36452, 2227169, 69.4866837, 'failure_return_candidate'),
             (1130, 36469, 0, 0, 'new_world'),
-            (1025, 36473, 40996391, 376.9989922, 'clear_candidate_with_result'),
-            (1027, 36514, 62082839, 396.8790624, 'clear_candidate_with_result'),
+            (1025, 36473, 40996380, 376.9989922, 'clear_candidate_with_result'),
+            (1027, 36514, 62082822, 396.8790624, 'clear_candidate_with_result'),
             (939, 36557, 155000, 19.1480595, 'failure_candidate'),
-            (939, 36577, 6259648, 66.386818, 'clear_candidate_with_result'),
+            (939, 36577, 6259645, 66.386818, 'clear_candidate_with_result'),
             (1025, 36628, 1401893, 25.8266712, 'failure_return_candidate'),
             (1027, 36641, 899927, 25.5148977, 'failure_return_candidate')]
         actual = [(q['quest_measurement']['quest_candidate'], q['quest_measurement']['world_candidate'],

@@ -532,7 +532,10 @@ class LiveCaptureRegressionTests(unittest.TestCase):
         self.assertEqual(report["counts"]["negative_records"], 18)
         self.assertEqual(report["roles"]["self"]["damage_taken"], 6)
         self.assertEqual(report["damage_by_direction"]["player_to_enemy"], 170186)
-        self.assertEqual(report["damage_by_direction"]["player_to_object"], 6)
+        self.assertNotIn('player_to_object', report['damage_by_direction'])
+        self.assertEqual(report['damage_totals']['excluded_positive_sum'], 11)
+        self.assertEqual(report['damage_totals']['excluded_positive_sum'],
+                         sum(e['signed_value'] for e in audit if e['attack_id'] == 0 and e['signed_value'] > 0))
         first = next(event for event in audit if event["signed_value"] > 0 and event["source"]["role"] == "self")
         self.assertEqual((first["sequence"], first["signed_value"], first["target"]["role"], first["target"]["object_id"]),
                          (3, 4281, "enemy", 303))

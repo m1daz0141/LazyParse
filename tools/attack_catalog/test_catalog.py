@@ -4,44 +4,45 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from .catalog import AttackCatalog, DATA, attack_label, get_catalog, parse_csv, with_attack_names
+from .catalog import AttackCatalog, attack_label, get_catalog, parse_csv, with_attack_names
 from .audit import audit_report
 
 CAPTURE = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic-auto-fixture-001/run-100000000000000001-1-0/segment-000001/capture.opcap'
 
 
 class CatalogTests(unittest.TestCase):
-    def test_editable_csv_overrides_adds_and_preserves_pinned_source(self):
+    def test_config_csv_is_the_only_source_and_removed_entries_stay_unknown(self):
         with tempfile.TemporaryDirectory() as work:
             editable = Path(work) / 'skills.csv'
-            pinned_hash = hashlib.sha256((DATA / 'skills_ja.csv').read_bytes()).hexdigest()
             editable.write_text('Type,ID,Kind,Note\n手動名,115059488,PA,注記\n追加名,4294967295,Special\n', encoding='utf-8-sig')
-            catalog = AttackCatalog.load(editable=editable)
+            catalog = AttackCatalog.load(editable)
             self.assertIsNone(catalog.error)
             self.assertEqual(catalog.labels(115059488)['attack_name'], '手動名')
             self.assertEqual(catalog.labels(115059488)['attack_name_source'], {'path': str(editable), 'line': 2})
             self.assertEqual(catalog.labels(0xFFFFFFFF)['attack_name'], '追加名')
-            self.assertEqual(catalog.labels(2944355330)['attack_name'], '通常攻撃(マロン)')
-            self.assertTrue(catalog.metadata()['editable']['manually_editable'])
-            self.assertEqual(hashlib.sha256((DATA / 'skills_ja.csv').read_bytes()).hexdigest(), pinned_hash)
+            self.assertFalse(catalog.labels(2944355330)['attack_name_matched'])
+            self.assertEqual(catalog.metadata()['path'], str(editable))
+            self.assertEqual(catalog.metadata()['entries'], 2)
+            self.assertNotIn('source', catalog.metadata())
+            editable.write_text('追加名,4294967295,Special\n', encoding='utf-8')
+            self.assertFalse(AttackCatalog.load(editable).labels(115059488)['attack_name_matched'])
             editable.write_text('Bad,7,PA\nConflict,7,Tech\n', encoding='utf-8')
-            fallback = AttackCatalog.load(editable=editable)
+            fallback = AttackCatalog.load(editable)
             self.assertIn('Conflicting', fallback.error)
-            self.assertEqual(fallback.labels(115059488)['attack_name'], 'マロンブレイク')
+            self.assertFalse(fallback.labels(115059488)['attack_name_matched'])
             self.assertFalse(fallback.labels(7)['attack_name_matched'])
-            self.assertFalse(fallback.metadata()['editable']['available'])
+            self.assertFalse(fallback.metadata()['available'])
 
-    def test_pinned_bytes_count_and_comment_are_not_an_attack(self):
-        # The pinned source has 1900 IDs; a user's editable CSV can add more.
-        with tempfile.TemporaryDirectory() as work:
-            catalog = AttackCatalog.load(editable=Path(work) / 'absent.csv')
+    def test_seed_csv_and_comment_are_not_an_attack(self):
+        path = Path(__file__).with_name('skills.csv')
+        catalog = AttackCatalog.load(path)
         self.assertIsNone(catalog.error)
-        self.assertEqual(len(catalog.entries), 1900)
-        self.assertEqual(hashlib.sha256((DATA / 'skills_ja.csv').read_bytes()).hexdigest(), catalog.source['sha256'])
+        self.assertEqual(len(catalog.entries), len(parse_csv(path.read_text(encoding='utf-8-sig'))))
         self.assertNotIn(32, catalog.entries)
         self.assertEqual(catalog.labels(115059488)['attack_name'], 'マロンブレイク')
-        self.assertEqual(catalog.labels(115059488)['attack_name_source']['line'], 986)
+        self.assertEqual(catalog.labels(115059488)['attack_name_source']['path'], str(path))
         self.assertEqual(attack_label(4065469038), '通常攻撃(タクト)')
 
     def test_unsigned_id_unknown_and_zero_are_preserved(self):
@@ -66,18 +67,39 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Conflicting'):
             parse_csv('First,7,PA\nSecond,7,PA\n')
 
-    def test_missing_or_changed_catalog_falls_back_without_touching_totals(self):
+    def test_missing_or_invalid_config_csv_has_no_fallback(self):
         with tempfile.TemporaryDirectory() as work:
             directory = Path(work)
-            missing = AttackCatalog.load(directory)
+            missing = AttackCatalog.load(directory / 'skills.csv')
             self.assertTrue(missing.error)
-            source = json.loads((DATA / 'source.json').read_text())
-            (directory / 'source.json').write_text(json.dumps(source))
-            (directory / 'skills_ja.csv').write_text('Unexpected,7,PA\n')
-            changed = AttackCatalog.load(directory)
-            self.assertIn('SHA-256', changed.error)
+            (directory / 'skills.csv').write_text('Unexpected,invalid,PA\n')
+            changed = AttackCatalog.load(directory / 'skills.csv')
+            self.assertTrue(changed.error)
             self.assertFalse(changed.labels(115059488)['attack_name_matched'])
             self.assertEqual(changed.entries, {})
+
+    def test_missing_or_invalid_names_do_not_change_damage_totals(self):
+        from ..combat_core.test_combat_core import engine, registry, packet
+        rows = [(1, 0, packet(value=100)), (2, 1000, packet(value=300))]
+        original = engine(rows, registry()).finish()
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / 'skills.csv'
+            try:
+                for contents in (None, 'Invalid,not-an-id,PA\n'):
+                    if contents is not None:
+                        path.write_text(contents, encoding='utf-8')
+                    with patch('tools.attack_catalog.catalog.EDITABLE_CSV', path):
+                        get_catalog.cache_clear()
+                        report = engine(rows, registry()).finish()
+                        self.assertEqual(report['counts'], original['counts'])
+                        self.assertEqual(report['damage_totals'], original['damage_totals'])
+                        self.assertEqual(report['roles'], original['roles'])
+                        self.assertEqual(report['timing'], original['timing'])
+                        self.assertTrue(all(a['attack_name'] is None for a in report['attacks']))
+                        self.assertFalse(report['attack_catalog']['available'])
+                        self.assertTrue(report['attack_catalog']['error'])
+            finally:
+                get_catalog.cache_clear()
 
     def test_label_projection_keeps_id_groups_and_every_numeric_value(self):
         report = {'counts': {'records': 5}, 'attacks': [

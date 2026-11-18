@@ -1,4 +1,4 @@
-"""Audit saved Classic captures against the pinned Japanese attack catalog."""
+"""Audit saved Classic captures against config/skills.csv."""
 import argparse
 import csv
 import json

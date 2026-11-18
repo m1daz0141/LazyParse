@@ -224,9 +224,9 @@ class WindowTests(unittest.TestCase):
                 self.assertEqual(len(detail.sources.get_children()), 2)
                 app._clear_notice()
                 self.assertEqual([button.cget('text') for button in app.menu_holder.winfo_children()],
-                     ['計測', 'DPS', '解析', '設定', '表示', 'ログ'])
+                     ['計測', '解析', '設定', '表示', 'ログ'])
                 continuous = display_elapsed(app.report)
-                app.dps_menu.invoke(1)
+                app.parsing_menu.invoke('DPS：総ダメージ基準表示')
                 self.assertEqual(app.settings.dps_mode, 'damage')
                 self.assertEqual(app.variables['dps_mode'].get(), 'damage')
                 self.assertNotEqual(display_elapsed(app.report), continuous)
@@ -235,7 +235,7 @@ class WindowTests(unittest.TestCase):
                 app.toggle('time_decimals', False)
                 self.assertTrue(app.summary.cget('text').startswith(f'Time {int(display_elapsed(app.report))} s'))
                 self.assertEqual(backend.requests, [])  # Options never control the capture worker.
-                app.dps_menu.invoke(0)
+                app.parsing_menu.invoke('DPS：クエスト全体表示')
                 self.assertEqual(app.variables['dps_mode'].get(), 'quest')
                 self.assertEqual(display_elapsed(app.report), continuous)
                 app.toggle('players_only', False)
@@ -267,7 +267,7 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(loaded.opacity, 1)
             self.assertEqual(loaded.font_size, 9)
             self.assertEqual(loaded.columns, ['name', 'dps'])
-            self.assertEqual((loaded.dps_mode, loaded.time_decimals), ('quest', True))
+            self.assertEqual((loaded.dps_mode, loaded.time_decimals), ('quest', False))
 
 
 @unittest.skipUnless(os.name == 'nt' and HOST.exists(), 'Windows native runtime fixture required')

@@ -32,15 +32,8 @@ HANDOFF.md
 /OverParse/
 /OverParse.sln
 /FodyWeavers.xml
-/docs/OVERPARSE-README.md
 /tools/OverParseCsv/
 /tools/combat_core/ja_exclusions.local.csv
-
-# Keep only the root and native-capture README in the public tree.
-/tools/attack_catalog/README.md
-/tools/binary_analysis/README.md
-/tools/combat_core/README.md
-/tools/gui/README.md
 
 # Local portable settings, captures, builds and catalog investigations.
 /config/

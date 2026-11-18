@@ -23,6 +23,8 @@ Due to technical limitations, the Epic Games version cannot be used. I don't kno
 
 ## 使用方法
 
+[LazyParse 0.1.2（Windows x64）をダウンロード](https://github.com/m1daz0141/LazyParse/releases/tag/v0.1.2)
+
 ※かならず PSO2 を起動する前にこっちを起動すること
 
 1. 展開して好きなところに置いておく  
@@ -30,7 +32,7 @@ Due to technical limitations, the Epic Games version cannot be used. I don't kno
 
 2. ダブルクリックで起動  
    （初回 or アップデート時のみ）PSO2 内の「pso2_bin/sub」ゲームフォルダを選択する  
-   「eos_gaming.dll」が配置される）
+   「eos_gaming.dll」が配置される
 
 3. PSO2 を通常通り起動
 
@@ -42,18 +44,11 @@ Due to technical limitations, the Epic Games version cannot be used. I don't kno
 
 あとはメニューみて  
 
-## よくある質問を先回りする
-
-・「pso2bridge.dll がなんとか」ってエラーが出る！  
-⇒メンテでアプデされたから。そのうち直す
-
-・思いつかんかった
-
 ## その他
 
 クエスト検知用データ、攻撃用データは以下  
 https://github.com/m1daz0141/LazyParse-Data  
-⇒「解析」メニューの「CSVを開く」から読み込み可能
+「解析」メニューの「クエスト名CSVを開く」または「攻撃名CSVを開く」で編集し、対応する「再読込」で反映
 
 ## Thanks
 
@@ -61,7 +56,7 @@ https://github.com/m1daz0141/LazyParse-Data
 https://github.com/m1daz0141/LazyParse/blob/main/License  
 https://github.com/m1daz0141/LazyParse/blob/main/COPYRIGHT
 
-Remon-7L.github.io - Skills CSVデータ  
+Remon-7L.github.io - Skills CSVデータ
 https://github.com/Remon-7L/Remon-7L.github.io
 
 Miss Mysty's OverParse - 元ネタ  

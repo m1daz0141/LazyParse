@@ -464,7 +464,7 @@ class PortableTests(unittest.TestCase):
                 self.assertEqual(status['virtual_protect_calls'], 0)
                 self.assertTrue(status['stopped'])
                 build = json.loads((RESOURCES/'build.json').read_text(encoding='utf-8-sig'))
-                profile_path = Path(__file__).resolve().parents[1]/'native_capture/profiles/classic-2026-10-21.json'
+                profile_path = Path(__file__).resolve().parents[1]/'native_capture/profiles/classic-2026-11-18.json'
                 profile = json.loads(profile_path.read_text())
                 self.assertEqual(build['classic_sha256'], profile['classic_sha256'])
                 self.assertEqual(int(status['callback_rva'], 0), int(profile['layout']['callback_rva'], 0))

@@ -4,7 +4,7 @@ $output = Join-Path $PSScriptRoot 'bin'
 $zig = Join-Path $source 'vendor/zig-x86_64-windows-0.15.2/zig.exe'
 if (-not (Test-Path -LiteralPath $zig)) { throw 'Build the native prerequisites with tools/native_capture/build.ps1 -Bootstrap first.' }
 New-Item -ItemType Directory -Force $output | Out-Null
-$profile = Get-Content -LiteralPath "$source/profiles/classic-2026-10-21.json" -Raw | ConvertFrom-Json
+$profile = Get-Content -LiteralPath "$source/profiles/classic-2026-11-18.json" -Raw | ConvertFrom-Json
 foreach ($name in @('classic_sha256','bridge_sha256')) {
     if ($profile.$name -cnotmatch '^[a-f0-9]{64}$') { throw "Invalid profile hash: $name" }
 }

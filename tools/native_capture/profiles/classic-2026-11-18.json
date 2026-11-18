@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "jp-classic-2026-11-18",
+  "classic_sha256": "dd25110b8c1e7e788a4df5d329567bedd21cefcf5e87379ba0076ae055464f03",
+  "bridge_sha256": "cd81a4ee1fc2623dc4c0629ba592a993efabb298494dcd3c476042451dfd3429",
+  "expanded_classic_text_sha256": "0932499f77958ecf7fe93ea8ee2d2f4e21f990ecd0c6eafe0e3a0968c5fe4800",
+  "expanded_bridge_text_sha256": "d5f4c001d1499a9e1554b87b95d14f7975046a806ad900753bc807d39cddaf22",
+  "layout": {
+    "callback_rva": "0xc61dd0",
+    "client_global_rva": "0x3ce8698",
+    "client_vtable_rva": "0x35a26e0",
+    "network_vtable_rva": "0x35a25c0",
+    "socket_vtable_rva": "0x35a2640",
+    "listener_vtable_rva": "0x34be9f0",
+    "listener_adapter_rva": "0x174920",
+    "damage_descriptor_rva": "0x387b290",
+    "required_image_size": "0x3ce86a0"
+  },
+  "validation": {
+    "method": "offline_decode_constructor_and_dispatcher_crosschecks",
+    "live_verified": false,
+    "packet_body_live_verified": false
+  }
+}

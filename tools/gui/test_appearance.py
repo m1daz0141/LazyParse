@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from .appearance import (Background, import_background, remove_background, palette,
-                         rgb_color, DEFAULT_BACKGROUND, DEFAULT_ACCENT)
+                         rgb_color, status_band_color, DEFAULT_BACKGROUND, DEFAULT_ACCENT)
 from .settings import Settings
 from .viewmodel import status_view
 from .test_text_export import quest_report
@@ -77,6 +77,28 @@ class AppearanceTests(unittest.TestCase):
         self.assertEqual(status_view({'effective_recording': True})[0], '計測中')
         self.assertEqual(status_view({'state': 'writer_error'})[0], '取得エラー')
         self.assertEqual(status_view({'game_version_error': 'mismatch'})[0], 'ゲームDLLの確認が必要')
+
+    def test_footer_band_uses_custom_accent_only_for_normal_states(self):
+        for snapshot in ({'effective_recording': True}, {'state': 'paused'},
+                         {'state': 'binding_ready_waiting_for_start'}):
+            label, color = status_view(snapshot)
+            self.assertEqual(status_band_color(label, color, DEFAULT_ACCENT), color)
+            self.assertEqual(status_band_color(label, color, '#FF0080'), '#ff0080')
+        self.assertEqual(status_band_color(*status_view({'effective_recording': True}), DEFAULT_ACCENT), '#69c9b0')
+        for snapshot in ({'state': 'writer_error'}, {'game_version_error': 'mismatch'}):
+            label, color = status_view(snapshot)
+            self.assertEqual(status_band_color(label, color, '#ff0080'), color)
+        label, color = status_view({}, saved=True)
+        self.assertEqual(status_band_color(label, color, '#ff0080'), color)
+
+    def test_column_widths_are_saved_and_invalid_values_ignored(self):
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / 'preferences.json'
+            Settings(column_widths={'name': 150.5, 'dps': 40}).save(path)
+            self.assertEqual(Settings.load(path).column_widths, {'name': 150.5, 'dps': 40.0})
+            path.write_text(json.dumps({'schema_version': 1, 'column_widths':
+                {'name': 0, 'dps': 'wide', 'unknown': 50, 'damage_dealt': 90, 'ja': True}}))
+            self.assertEqual(Settings.load(path).column_widths, {'damage_dealt': 90.0})
 
 
 class AppearanceWindowTests(unittest.TestCase):
@@ -183,6 +205,108 @@ class AppearanceWindowTests(unittest.TestCase):
                 self.assertEqual(Settings.load(moved/'preferences.json').background_image, '')
                 self.assertFalse((moved / name).exists())
                 self.assertFalse(backend.requests)
+            finally:
+                app.close()
+
+    def test_footer_band_follows_accent_and_header_borders_resize_columns(self):
+        import tkinter as tk
+        from .app import Application, COLUMN_MIN_WIDTH
+
+        class Stub:
+            interval = .5
+            def __init__(self):
+                self.updates, self.events, self.requests = queue.Queue(), queue.Queue(), []
+            def submit(self, *args, **kwargs):
+                self.requests.append((args, kwargs))
+            def close(self):
+                pass
+
+        class Event:
+            def __init__(self, x):
+                self.x, self.y, self.x_root, self.y_root = x, 5, x, 5
+
+        with tempfile.TemporaryDirectory() as work:
+            settings_path = Path(work) / 'config/preferences.json'
+            root, backend = tk.Tk(), Stub()
+            app = Application(root, backend, settings_path=settings_path, start_backend=False)
+            try:
+                app.snapshot = {'effective_recording': True, 'measurement': {'report': quest_report()}}
+                root.update()
+                app.render()
+                self.assertEqual(app.indicator.cget('background'), '#69c9b0')
+                self.assertTrue(app._commit_appearance(DEFAULT_BACKGROUND, '#aa3366', ''))
+                self.assertEqual(app.indicator.cget('background'), '#aa3366')
+                app.reset_appearance()
+                self.assertEqual(app.indicator.cget('background'), '#69c9b0')
+
+                before = app._layout()
+                (name, _, start, border), (right, _, _, right_end) = before[0], before[1]
+                sort = (app.sort_key, app.descending)
+                app._header_press(Event(round(border)))
+                self.assertEqual((app.sort_key, app.descending), sort)  # A border press does not sort.
+                app._header_drag(Event(right_end + 100))
+                self.assertAlmostEqual(app._layout()[0][3], right_end - COLUMN_MIN_WIDTH, delta=1)
+                app._header_drag(Event(round(border) + 10))
+                app._header_release(Event(round(border) + 10))
+                after = app._layout()
+                self.assertAlmostEqual(after[0][3], round(border) + 10, delta=1)
+                self.assertAlmostEqual(after[1][3], right_end, delta=1)  # Other columns keep their place.
+                for moved, original in zip(after[2:], before[2:]):
+                    self.assertAlmostEqual(moved[2], original[2], places=6)
+                    self.assertAlmostEqual(moved[3], original[3], places=6)
+                app._header_press(Event(round(after[0][3])))
+                app._header_drag(Event(-500))
+                self.assertAlmostEqual(app._layout()[0][3], COLUMN_MIN_WIDTH, delta=1)
+                app._header_release(Event(0))
+                app._header_press(Event(round((after[1][2] + after[1][3]) / 2)))
+                self.assertEqual(app.sort_key, right)  # Inside a column, a click still sorts.
+                widths = dict(app.settings.column_widths)
+                self.assertEqual(set(widths), {name, right})
+                self.assertFalse(backend.requests)
+            finally:
+                app.close()
+            self.assertEqual(Settings.load(settings_path).column_widths, widths)
+            root, backend = tk.Tk(), Stub()
+            app = Application(root, backend, settings_path=settings_path, start_backend=False)
+            try:
+                root.geometry('670x275+200+150')
+                root.update()
+                self.assertEqual(app.settings.column_widths, widths)
+                # A long footer never hides the grip, and every border/corner resizes.
+                app.notify('長い通知 ' * 60)
+                app.render()
+                root.update()
+                self.assertGreater(app.grip.winfo_width(), 0)
+                self.assertLessEqual(app.grip.winfo_rootx() + app.grip.winfo_width(), root.winfo_rootx() + root.winfo_width())
+
+                class At:
+                    def __init__(self, x, y):
+                        self.x_root, self.y_root = root.winfo_rootx() + x, root.winfo_rooty() + y
+                        self.x = self.y = 0
+                with patch.object(app, 'show_diagnostics') as diagnostics:
+                    footer_y = root.winfo_height() - 2
+                    self.assertEqual(app._edge_press(At(300, footer_y)), 'break')
+                    self.assertEqual(app._edge_drag(At(300, footer_y + 40)), 'break')
+                    app._edge_release(At(300, footer_y + 40))
+                    root.update()
+                    self.assertEqual(root.winfo_height(), 315)
+                    app.summary.event_generate('<Button-1>', x=20, y=5)
+                    diagnostics.assert_called_once()  # Away from the border the footer click still works.
+                app._edge_press(At(1, 1))
+                app._edge_drag(At(-49, -29))
+                app._edge_release(At(-49, -29))
+                root.update()
+                self.assertEqual((root.winfo_width(), root.winfo_height(), root.winfo_rootx(), root.winfo_rooty()),
+                                 (720, 345, 150, 120))
+                app._edge_press(At(root.winfo_width() - 1, 100))
+                app._edge_drag(At(-2000, 100))
+                app._edge_release(At(-2000, 100))
+                root.update()
+                self.assertEqual((root.winfo_width(), root.winfo_rootx()), (500, 150))  # Minimum width.
+                self.assertIsNone(app._edge_press(At(250, 100)))  # Inside: normal widget handling.
+                self.assertEqual(app._edges(At(0, root.winfo_height() - 1)), 'sw')
+                app.reset_column_widths()
+                self.assertEqual(app.settings.column_widths, {})
             finally:
                 app.close()
 

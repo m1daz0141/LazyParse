@@ -153,6 +153,12 @@ class ViewModelTests(unittest.TestCase):
         self.assertEqual(hidden[0]['damage_dealt'], 92441)
         self.assertEqual(hidden[0]['share'], own_row['share'])
         self.assertLess(hidden[0]['share'], 100)
+        third = deepcopy(other)
+        third.update(object_id=10000002, actor_key='4:0:10000002', name='Third', damage_dealt=1)
+        report['actors'].append(third)
+        anonymous = {row['object_id']: row['name'] for row in actor_rows(report, anonymize=True)}
+        self.assertEqual(anonymous, {own['object_id']: '自分', 999: 'Player 1', 10000002: 'Player 2'})
+        self.assertFalse(any('999' in name or '10000002' in name for name in anonymous.values()))
 
     def test_exported_report_reopens_and_background_open_does_not_enable_controls(self):
         with tempfile.TemporaryDirectory() as work:

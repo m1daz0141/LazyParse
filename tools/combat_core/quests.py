@@ -18,7 +18,7 @@ SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b8612
 SUPPORTED_CLASSICS = frozenset({SUPPORTED_CLASSIC,
     'b434e9e245a1ba02a71fefb360c5a25b6063b616a474da4ba0fca4867ad7f3e3',
     'dd25110b8c1e7e788a4df5d329567bedd21cefcf5e87379ba0076ae055464f03'})
-RULE_VERSION = 11
+RULE_VERSION = 12
 TIMED_GAP_FLAGS = {'binding_gap', 'identity_context_binding_reset'}
 # This adjacent pair was observed only for 1132. Other observed return layouts
 # have their own scoped rules; incapacitation alone is not a universal end.
@@ -190,16 +190,18 @@ class QuestBucket:
                       quest_end_detection=self.reason or 'quest_measurement_in_progress')
         for group in [*result['actors'], *result['attacks'], *result['roles'].values()]:
             group['dps'] = group['damage_dealt'] / elapsed if elapsed else None
+        # Only intervals overlapping an observation gap (lost binding until
+        # the next world notice) are suspended; later quests are not.
+        gaps = [gap for gap in self.owner.gaps if (self.end is None or self.end >= gap[0])
+                and (gap[1] is None or self.start < gap[1])]
         result['quest_measurement'] = {'id': self.key, 'number': self.quest_number or self.number,
             'interval_number': self.number, 'kind': self.kind,
             'world_candidate': self.world, 'quest_candidate': self.quest, 'start_qpc': self.start,
             'end_qpc': self.end, 'end_reason': self.reason, 'result_qpc': self.result_qpc,
             'started_mid_quest': self.partial, 'rule_version': RULE_VERSION,
             'experimental': True, 'all_quest_types_verified': False,
-            'rules_suspended': self.owner.hard_suspended or bool(self.owner.gap_qpc is not None and
-                (self.end is None or self.end >= self.owner.gap_qpc)),
-            'observation_gap_qpc': self.owner.gap_qpc if self.owner.gap_qpc is not None and
-                (self.end is None or self.end >= self.owner.gap_qpc) else None,
+            'rules_suspended': self.owner.hard_suspended or bool(gaps),
+            'observation_gap_qpc': gaps[0][0] if gaps else None,
             'source_sha256': self.owner.source_sha256,
             'start_notice_sequence': self.start_sequence, 'end_notice_sequence': self.end_sequence,
             'clear_pair_sequences': self.clear_pair_sequences, 'result_notice_sequence': self.result_sequence,
@@ -222,7 +224,7 @@ class QuestSession:
         self.supported = source_sha256 in SUPPORTED_CLASSICS
         self.suspended = False
         self.hard_suspended = self.timed_suspended = False
-        self.gap_qpc = None
+        self.gaps = []  # [lost_binding_qpc, resumed_qpc or None]
         self.identities = []
         self.position = 0
         self.through = start_qpc
@@ -280,15 +282,23 @@ class QuestSession:
             self.last_failure_return_prefix = None
             self.campship_return.reset()
             self.clear_notice.reset()
-            if self.gap_qpc is None:
-                self.gap_qpc = event.qpc
+            if not self.gaps or self.gaps[-1][1] is not None:
+                self.gaps.append([event.qpc, None])
             self.active.local_flags.update(TIMED_GAP_FLAGS)
             self._close(event.qpc, 'observation_gap', event.sequence)
             self._new(event.qpc, 'outside_quest').local_flags.update(TIMED_GAP_FLAGS)
             return
+        level = self.level(event) if self.supported and not self.hard_suspended else None
+        if level is not None and self.timed_suspended:
+            # A world notice after the binding returned (e.g. re-login from the
+            # title screen) is a fresh, verified boundary: resume automatic
+            # intervals from here. Data in between stays in the gap interval.
+            self.timed_suspended = False
+            self.suspended = self.hard_suspended
+            if self.gaps and self.gaps[-1][1] is None:
+                self.gaps[-1][1] = event.qpc
         if not self.supported or self.suspended:
             return
-        level = self.level(event)
         if level is not None:
             world, quest = level
             self.last_failure_return_prefix = None

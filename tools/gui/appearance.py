@@ -51,6 +51,13 @@ def palette(background=DEFAULT_BACKGROUND, accent=DEFAULT_ACCENT):
         panel, text)))
 
 
+def status_band_color(label, color, accent):
+    """Footer band: the user's accent for normal states, built-in colors otherwise."""
+    if label in {'待機中', '計測中'} and valid_color(accent) and accent.lower() != DEFAULT_ACCENT:
+        return accent.lower()
+    return color
+
+
 def import_background(source, directory):
     """Decode first frame/orientation, strip metadata and copy a bounded PNG."""
     from PIL import Image, ImageOps

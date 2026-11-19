@@ -176,6 +176,41 @@ class QuestTests(unittest.TestCase):
         self.assertEqual(second['quest_measurement']['end_qpc'], 3000)
         self.assertIn('binding_gap', second['quality']['flags'])
 
+    def test_world_notice_after_relogin_gap_resumes_automatic_quests(self):
+        identities, _ = fixture()
+        # Clear quest 1, lose the binding (title screen), log in again: lobby
+        # then a new quest, all within one recording.
+        # The binding reset invalidates identities; the game re-announces them.
+        again = [IdentityEvent(sequence, 0, qpc * 10000, qpc, 1000, 20, identity_packet(major, minor, ref))
+                 for sequence, qpc, (major, minor, ref) in [(11, 2450, (6, 0, SELF)), (13, 2550, (8, 0xd, ENEMY))]]
+        identities = identities[:8] + [notice(9, 2200, 0xff, 1), level(10, 2400, 0, 504), again[0],
+                                       level(12, 2500, 19), again[1],
+                                       notice(14, 2900, 0xb, 0x26, 24), notice(15, 2901, 0xb, 0x11, 48)]
+        damage = events([(1, 150, packet(value=100)), (2, 2300, packet(value=7)),
+                         (3, 2600, packet(value=80)), (4, 2700, packet(value=20))])
+        flags = ['binding_gap', 'identity_context_binding_reset']
+        direct = self.session()
+        direct.update(identities, damage, 3500, end_qpc=3500, flags=flags)
+        staged = self.session()
+        staged.update(identities[:9], damage[:2], 2350, flags=flags)
+        self.assertTrue(staged.view()['suspended'])
+        staged.update(identities, damage[2:], 3500, end_qpc=3500, flags=flags)
+        self.assertEqual(direct.view(), staged.view())
+        view = direct.view()
+        self.assertFalse(view['suspended'])
+        quests = [r for r in view['history'] if r['quest_measurement']['kind'] == 'quest']
+        self.assertEqual([r['quest_measurement']['world_candidate'] for r in quests], [17, 19])
+        first, second = quests
+        self.assertFalse(first['quest_measurement']['rules_suspended'])
+        self.assertEqual(second['roles']['self']['damage_dealt'], 100)
+        self.assertEqual(second['quest_measurement']['end_reason'], 'clear_candidate')
+        self.assertFalse(second['quest_measurement']['rules_suspended'])
+        self.assertIsNone(second['quest_measurement']['observation_gap_qpc'])
+        gap = next(r for r in view['history'] if r['quest_measurement']['start_qpc'] == 2200)
+        self.assertEqual((gap['quest_measurement']['kind'], gap['counts']['records']), ('outside_quest', 1))
+        self.assertTrue(gap['quest_measurement']['rules_suspended'])
+        self.assertEqual(view['all_records'], 4)
+
     def test_gap_after_segment_end_does_not_invalidate_the_segment(self):
         identities, damage = fixture()
         identities += [notice(11, 3600, 0xff, 1)]

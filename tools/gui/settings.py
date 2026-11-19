@@ -8,6 +8,7 @@ from ..paths import CONFIG
 from .appearance import DEFAULT_BACKGROUND, DEFAULT_ACCENT, valid_color, BACKGROUND_NAME
 
 STATE = CONFIG
+COLUMN_WIDTH_RANGE = (1, 5000)
 
 
 @dataclass
@@ -31,6 +32,8 @@ class Settings:
     font_size: int = 9
     interval: float = 0.5
     columns: list = field(default_factory=lambda: DEFAULT_COLUMNS.copy())
+    # Relative widths of resized columns; others use the built-in COLUMNS widths.
+    column_widths: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, path):
@@ -62,6 +65,10 @@ class Settings:
             allowed = {key for key, _, _ in COLUMNS}
             if isinstance(columns, list) and all(isinstance(key, str) for key in columns):
                 result.columns = list(dict.fromkeys(['name'] + [key for key in columns if key in allowed]))
+            widths = values.get('column_widths')
+            if isinstance(widths, dict):
+                result.column_widths = {key: float(value) for key, value in widths.items()
+                    if key in allowed and type(value) in (int, float) and COLUMN_WIDTH_RANGE[0] <= value <= COLUMN_WIDTH_RANGE[1]}
         except (OSError, ValueError, TypeError, AttributeError):
             pass
         return result

@@ -55,7 +55,11 @@ def actor_rows(report, *, players_only=True, only_me=False, anonymize=False, sor
     rows = []
     names = {(entry['object_id'], entry['entity_type'], entry['map_id']): entry
              for entry in (current_identities or {}).get('entities', []) if entry.get('name')}
-    for row in groups.values():
+    # Anonymous labels are numbered by first appearance and never contain the
+    # character ID, which would identify the player as well as the name.
+    anonymous = {key: f'Player {number}' for number, key in enumerate(
+        (key for key, row in groups.items() if row['kind'] == 'player' and row['role'] != 'self'), 1)}
+    for key, row in groups.items():
         if only_me and row['role'] != 'self':
             continue
         row['share'] = row['damage_dealt'] * 100 / total if total else 0
@@ -66,7 +70,7 @@ def actor_rows(report, *, players_only=True, only_me=False, anonymize=False, sor
             row['name_evidence'] = current.get('name_evidence')
         row['name'] = row.get('name') or f"#{row['object_id']}"
         if anonymize:
-            row['name'] = '自分' if row['role'] == 'self' else f"Player #{row['object_id']}" if row['kind'] == 'player' else row['name']
+            row['name'] = '自分' if row['role'] == 'self' else anonymous.get(key, row['name'])
         row['hit_rates'] = row['hit_rates'].as_dict()
         row['ja'] = row['hit_rates']['ja_percent']
         row['crit'] = row['hit_rates']['crit_percent']

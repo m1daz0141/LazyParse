@@ -17,7 +17,8 @@ from .backend import stored_history, history_key
 from .control import preparation_error
 from ..version import VERSION
 from .appearance import (palette, rgb, rgb_color, Background, import_background,
-                         remove_background, DEFAULT_BACKGROUND, DEFAULT_ACCENT)
+                         remove_background, status_band_color, DEFAULT_BACKGROUND, DEFAULT_ACCENT)
+from .windows import minimize as minimize_window
 
 BG = '#0a0a0a'
 PANEL = '#15191c'
@@ -25,6 +26,13 @@ TEXT = '#e4e8eb'
 MUTED = '#939da5'
 LINE = '#343c41'
 ACCENT = '#76d5cf'
+COLUMN_GRIP = 4  # pixels either side of a header border that start a resize
+COLUMN_MIN_WIDTH = 24
+MIN_WIDTH, MIN_HEIGHT = 500, 190
+EDGE = 5  # pixels inside the window border that resize it
+EDGE_TAG = 'LazyParseEdge'
+EDGE_CURSORS = {'': '', 'n': 'size_ns', 's': 'size_ns', 'w': 'size_we', 'e': 'size_we',
+                'nw': 'size_nw_se', 'se': 'size_nw_se', 'ne': 'size_ne_sw', 'sw': 'size_ne_sw'}
 
 
 class Tooltip:
@@ -150,6 +158,8 @@ class Application:
         self.notice_timer = None
         self.details = {}
         self.drag = None
+        self.column_drag = None
+        self.edge_resize = None
         self.closed = False
         self.tooltip = Tooltip(root, self._theme_widgets)
         self.fonts = {}
@@ -158,7 +168,7 @@ class Application:
         self.root.iconphoto(True, self.app_icon)
         self.root.configure(bg=LINE)
         self.root.geometry(self.settings.geometry)
-        self.root.minsize(500, 190)
+        self.root.minsize(MIN_WIDTH, MIN_HEIGHT)
         self.root.overrideredirect(True)
         self.root.attributes('-topmost', self.settings.topmost)
         self.root.attributes('-alpha', self.settings.opacity)
@@ -168,6 +178,7 @@ class Application:
         self._menus()
         self._apply_theme()
         self._load_background()
+        self._install_edge_resize()
         self.root.bind('<Control-Shift-E>', lambda event: self.command('Next'))
         self.root.bind('<Control-Shift-R>', lambda event: self.command('Reset'))
         self.root.bind('<Control-Shift-A>', lambda event: self.toggle('topmost'))
@@ -236,22 +247,26 @@ class Application:
         self.table.bind('<Leave>', self.tooltip.hide)
         self.table.bind('<MouseWheel>', lambda event: self.table.yview_scroll(-int(event.delta / 120), 'units'))
         self.table.bind('<Configure>', lambda event: self.render())
-        self.header.bind('<Button-1>', self._sort)
+        self.header.bind('<ButtonPress-1>', self._header_press)
+        self.header.bind('<B1-Motion>', self._header_drag)
+        self.header.bind('<ButtonRelease-1>', self._header_release)
+        self.header.bind('<Double-Button-1>', lambda event: self._column_border(event.x) is not None and self.reset_column_widths())
         self.header.bind('<Motion>', self._header_tip)
         self.header.bind('<Leave>', self.tooltip.hide)
         footer = tk.Frame(inner, bg=BG)
         footer.pack(side='bottom', fill='x', before=self.body_frame)
         self.indicator = tk.Frame(footer, height=2, bg=LINE)
         self.indicator.pack(fill='x')
-        self.summary = tk.Label(footer, text='Time —    Total —', bg=BG, fg=TEXT, anchor='w', padx=6, pady=3,
-                                font=('Meiryo UI', 8))
-        self.summary.pack(side='left', fill='x', expand=True)
-        self.summary.bind('<Button-1>', lambda event: self.show_diagnostics())
-        self.summary.bind('<Button-3>', self._row_menu)
-        self.grip = tk.Label(footer, text='◢', bg=BG, fg=MUTED, cursor='sizing', padx=3)
+        # Pack the grip first: a long summary must not squeeze it out.
+        self.grip = tk.Label(footer, text='◢', bg=BG, fg=MUTED, cursor='size_nw_se', padx=3)
         self.grip.pack(side='right')
         self.grip.bind('<ButtonPress-1>', self._resize_start)
         self.grip.bind('<B1-Motion>', self._resize_move)
+        self.summary = tk.Label(footer, text='Time —    Total —', bg=BG, fg=TEXT, anchor='w', padx=6, pady=3,
+                                font=('Meiryo UI', 8), width=1)
+        self.summary.pack(side='left', fill='x', expand=True)
+        self.summary.bind('<Button-1>', lambda event: self.show_diagnostics())
+        self.summary.bind('<Button-3>', self._row_menu)
 
     def _menu(self, label):
         button = tk.Menubutton(self.menu_holder, text=label, bg=BG, fg=TEXT, activebackground=PANEL,
@@ -308,6 +323,7 @@ class Application:
         display.add_separator()
         columns = tk.Menu(display, tearoff=False, bg=PANEL, fg=TEXT)
         display.add_cascade(label='表示する列', menu=columns)
+        display.add_command(label='列幅を元に戻す', command=self.reset_column_widths)
         self.column_vars = {}
         for key, label, _ in COLUMNS:
             variable = tk.BooleanVar(value=key in self.settings.columns)
@@ -630,7 +646,8 @@ class Application:
         self.render()
 
     def _layout(self):
-        columns = [(key, title, width) for key, title, width in COLUMNS if key in self.settings.columns]
+        widths = self.settings.column_widths
+        columns = [(key, title, widths.get(key, width)) for key, title, width in COLUMNS if key in self.settings.columns]
         width = max(1, self.table.winfo_width())
         total = sum(value for _, _, value in columns)
         x = 0
@@ -663,7 +680,7 @@ class Application:
                 (snapshot.get('identity') or {}).get('is_live') else None)
         label, color = status_view(snapshot, saved=self.saved is not None)
         self.status.configure(text='● ' + ('操作中' if self.busy else label), fg=color)
-        self.indicator.configure(bg=color)
+        self.indicator.configure(bg=status_band_color(label, color, self.settings.theme_accent))
         runtime = self.latest.get('runtime') or {}
         ready = self.saved is None and not self.busy and self.latest.get('worker_verified') and self.latest.get('heartbeat_fresh')
         can_start = ready and not self.latest.get('game_version_error')
@@ -781,7 +798,52 @@ class Application:
                 self.render()
                 break
 
+    def _column_border(self, x):
+        """Index of the column whose right edge is under x (the last edge is the window's)."""
+        layout = self._layout()
+        for index, (_, _, _, end) in enumerate(layout[:-1]):
+            if abs(x - end) <= COLUMN_GRIP:
+                return index
+        return None
+
+    def _header_press(self, event):
+        self.tooltip.hide()
+        index = self._column_border(event.x)
+        if index is None:
+            self.column_drag = None
+            self._sort(event)
+            return
+        layout = self._layout()
+        total = sum(self.settings.column_widths.get(key, width) for key, _, width in COLUMNS
+                    if key in self.settings.columns)
+        scale = layout[-1][3] / total
+        (left, _, start, _), (right, _, _, end) = layout[index], layout[index + 1]
+        self.column_drag = (left, right, start, end, scale)
+
+    def _header_drag(self, event):
+        if not self.column_drag:
+            return
+        left, right, start, end, scale = self.column_drag
+        border = min(max(event.x, start + COLUMN_MIN_WIDTH), end - COLUMN_MIN_WIDTH)
+        if end - start < 2 * COLUMN_MIN_WIDTH:
+            return
+        # The pair keeps its combined width, so the other columns stay put.
+        self.settings.column_widths[left] = (border - start) / scale
+        self.settings.column_widths[right] = (end - border) / scale
+        self.render()
+
+    def _header_release(self, event):
+        self.column_drag = None
+
+    def reset_column_widths(self):
+        self.settings.column_widths = {}
+        self.render()
+
     def _header_tip(self, event):
+        self.header.configure(cursor='sb_h_double_arrow' if self.column_drag or
+                              self._column_border(event.x) is not None else '')
+        if self.column_drag:
+            return
         for key, _, x, end in self._layout():
             if x <= event.x < end:
                 if key in {'ja', 'crit'}:
@@ -1000,14 +1062,73 @@ class Application:
 
     def _resize_move(self, event):
         x, y, width, height = self.resize
-        self.root.geometry(f'{max(500, width + event.x_root - x)}x{max(190, height + event.y_root - y)}')
+        self.root.geometry(f'{max(MIN_WIDTH, width + event.x_root - x)}x{max(MIN_HEIGHT, height + event.y_root - y)}')
+
+    def _install_edge_resize(self):
+        """Resize from every border and corner like a framed window.
+
+        The window has no system frame, so a bindtag placed before each
+        widget's own bindings claims presses within EDGE pixels of the border
+        (the footer's diagnostics click, the title bar drag, ...).
+        """
+        pending = [self.root]
+        while pending:
+            widget = pending.pop()
+            pending.extend(child for child in widget.winfo_children()
+                           if not isinstance(child, (tk.Toplevel, tk.Menu)))
+            if EDGE_TAG not in widget.bindtags():
+                widget.bindtags((EDGE_TAG,) + widget.bindtags())
+        self.root.bind_class(EDGE_TAG, '<Motion>', self._edge_hover)
+        self.root.bind_class(EDGE_TAG, '<ButtonPress-1>', self._edge_press)
+        self.root.bind_class(EDGE_TAG, '<B1-Motion>', self._edge_drag)
+        self.root.bind_class(EDGE_TAG, '<ButtonRelease-1>', self._edge_release)
+
+    def _edges(self, event):
+        x, y = event.x_root - self.root.winfo_rootx(), event.y_root - self.root.winfo_rooty()
+        width, height = self.root.winfo_width(), self.root.winfo_height()
+        vertical = 'n' if y < EDGE else 's' if y >= height - EDGE else ''
+        horizontal = 'w' if x < EDGE else 'e' if x >= width - EDGE else ''
+        return vertical + horizontal
+
+    def _edge_hover(self, event):
+        if not self.edge_resize:
+            self.root.configure(cursor=EDGE_CURSORS[self._edges(event)])
+
+    def _edge_press(self, event):
+        edges = self._edges(event)
+        if not edges:
+            return None
+        self.tooltip.hide()
+        self.edge_resize = (edges, event.x_root, event.y_root, self.root.winfo_rootx(), self.root.winfo_rooty(),
+                            self.root.winfo_width(), self.root.winfo_height())
+        return 'break'
+
+    def _edge_drag(self, event):
+        if not self.edge_resize:
+            return None
+        edges, x_root, y_root, x, y, width, height = self.edge_resize
+        dx, dy = event.x_root - x_root, event.y_root - y_root
+        new_width = max(MIN_WIDTH, width + dx if 'e' in edges else width - dx if 'w' in edges else width)
+        new_height = max(MIN_HEIGHT, height + dy if 's' in edges else height - dy if 'n' in edges else height)
+        # Dragging the left/top border keeps the opposite border in place.
+        left = x + width - new_width if 'w' in edges else x
+        top = y + height - new_height if 'n' in edges else y
+        self.root.geometry(f'{new_width}x{new_height}{left:+d}{top:+d}')
+        return 'break'
+
+    def _edge_release(self, event):
+        if not self.edge_resize:
+            return None
+        self.edge_resize = None
+        self.root.configure(cursor=EDGE_CURSORS[self._edges(event)])
+        return 'break'
 
     def minimize(self):
         self.tooltip.hide()
-        self.root.overrideredirect(False)
-        self.root.iconify()
+        minimize_window(self.root)
 
     def _mapped(self, event):
+        # Only the non-Windows fallback drops override-redirect to minimize.
         if event.widget is self.root and self.root.state() == 'normal' and not self.root.overrideredirect():
             self.root.overrideredirect(True)
 

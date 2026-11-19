@@ -7,7 +7,7 @@ import unittest
 from .quests import QuestSession, SUPPORTED_CLASSIC
 from .quest_replay import replay_quests
 from .test_quests import fixture, level, notice, transfer, campship_exit
-from .test_combat_core import events, packet
+from .test_combat_core import events, packet, ENEMY, SELF
 
 
 def success(quest, sequence=4, qpc=800):
@@ -185,13 +185,38 @@ class QuestSuccessTests(unittest.TestCase):
                 cases.append(good[:1]+[replace(good[1],prefix=bytes(empty))]+good[2:])
                 cases.append(good[:1]+[replace(good[1],prefix=good[1].prefix[:8])]+good[2:])
             if quest in (1005, 1006):
+                # The 0b:fc size is per step; everything else stays exact.
                 cases += [good[:5]+good[6:], good[:9]+good[10:],
-                          good[:6]+[replace(good[6], packet_size=11604)]+good[7:]]
+                          good[:5]+[replace(good[5], packet_size=52)]+good[6:],
+                          good[:9]+[replace(good[9], packet_size=28)]+good[10:]]
             for tail in cases:
                 with self.subTest(quest=quest, sequences=[e.sequence for e in tail]):
                     s = self.session()
                     s.update(metadata(quest, tail), events([(1, 200, packet(value=100))]), 1000)
                     self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
+
+    def test_divide_final_any_fc_size_ends_time_at_the_defeating_blow(self):
+        for size in (11332, 11600, 11680, 11604):
+            with self.subTest(size=size):
+                tail = success(1006)
+                tail = tail[:6] + [replace(tail[6], packet_size=size)] + tail[7:]
+                damage = events([(1, 200, packet(value=100)), (2, 500, packet(value=50)),
+                                 (3, 700, packet(ENEMY, SELF, 5))])  # Enemy hit after the blow.
+                s = self.session()
+                s.update(metadata(1006, tail), damage, 1000)
+                quest = next(r for r in s.view()['history'] if r['quest_measurement']['kind'] == 'quest')
+                m = quest['quest_measurement']
+                self.assertEqual((m['end_reason'], m['end_qpc']), ('clear_candidate', tail[-1].qpc))
+                self.assertEqual((m['time_end_qpc'], m['time_end_evidence']),
+                                 (500, 'last_player_hit_before_divide_final_clear'))
+                self.assertAlmostEqual(quest['timing']['elapsed_seconds'], .3)
+                self.assertEqual(quest['roles']['self']['damage_dealt'], 150)
+                self.assertEqual(quest['counts']['records'], 3)
+        # Other success layouts keep the clear notice as the end of time.
+        s = self.session()
+        s.update(metadata(1130, success(1130)), events([(1, 200, packet(value=100)), (2, 500, packet(value=50))]), 1000)
+        m = next(r for r in s.view()['history'] if r['quest_measurement']['kind'] == 'quest')['quest_measurement']
+        self.assertIsNone(m['time_end_qpc'])
 
     def test_start_straddles_sequence_late_hits_and_next_quest_are_consistent(self):
         for quest in (1130, 1132, 1005, 1006):
@@ -217,7 +242,7 @@ class QuestSuccessTests(unittest.TestCase):
             self.assertEqual(direct.view()['outside_records'], 1)
 
 
-RUN = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic-auto-fixture-007/run-100000000000000007-1-0'
+RUN = Path(__file__).resolve().parents[1] / 'native_capture/captures/classic-auto-247ae3146ebb4d6994fc1961a7e8e9f4/run-134369825290611262-2444-0'
 
 
 @unittest.skipUnless(RUN.exists(), 'private successful quest recording required')
@@ -243,8 +268,8 @@ class SuccessfulRecordingTests(unittest.TestCase):
                     self.assertEqual(by_quest[stage]['quest_measurement']['end_reason'], 'new_world')
 
 
-STEP30 = Path(__file__).resolve().parents[2] / 'logs_private_fixture/captures/run-100000000000000008-1-0/segment-000001/capture.opcap'
-MASQUERADE = Path(__file__).resolve().parents[2] / 'logs_private_fixture/c/captures/run-100000000000000009-1-0/segment-000001/capture.opcap'
+STEP30 = Path(__file__).resolve().parents[2] / 'logs_202610211926/captures/run-134370479272858682-7040-0/segment-000001/capture.opcap'
+MASQUERADE = Path(__file__).resolve().parents[2] / 'logs_202610211926/c/captures/run-134370586778891416-12820-0/segment-000001/capture.opcap'
 
 
 @unittest.skipUnless(MASQUERADE.exists(), 'private short Masquerade success recording required')
@@ -312,7 +337,10 @@ class Step30RecordingTests(unittest.TestCase):
         self.assertEqual(q['end_reason'], 'clear_candidate_with_result')
         self.assertEqual(final['roles']['self']['damage_dealt'], 24366985)
         self.assertEqual(view['outside_records'], 47)  # Includes all 16 post-clear records.
-        self.assertAlmostEqual(final['timing']['elapsed_seconds'], 112.8324147)
+        # Time ends at the defeating blow, ~16 s before the post-cut-scene result.
+        self.assertEqual(q['time_end_evidence'], 'last_player_hit_before_divide_final_clear')
+        self.assertAlmostEqual(final['timing']['elapsed_seconds'], 96.8814019)
+        self.assertAlmostEqual((q['end_qpc'] - q['time_end_qpc']) / 10_000_000, 15.951, places=3)
         for stage in (972, 999, 966, 946):
             self.assertEqual(by_quest[stage]['quest_measurement']['end_reason'], 'new_world')
 

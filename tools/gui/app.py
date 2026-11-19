@@ -12,10 +12,10 @@ from .viewmodel import COLUMNS, number, percentage, actor_rows, attack_rows, sou
 from .timing import with_dps_mode, DPS_MODES
 from ..attack_catalog.catalog import attack_label, get_catalog, with_attack_names, EDITABLE_CSV
 from ..combat_core.quest_catalog import QUESTS_CSV, get_quest_catalog, quest_label
+from ..combat_core.damage_policy import EXCLUSIONS_PATH, read_damage_exclusions
 from .text_export import EXPORT_DIRECTORY, filename
 from .backend import stored_history, history_key
 from .control import preparation_error
-from ..version import VERSION
 from .appearance import (palette, rgb, rgb_color, Background, import_background,
                          remove_background, status_band_color, DEFAULT_BACKGROUND, DEFAULT_ACCENT)
 from .windows import minimize as minimize_window
@@ -163,7 +163,7 @@ class Application:
         self.closed = False
         self.tooltip = Tooltip(root, self._theme_widgets)
         self.fonts = {}
-        self.root.title('LazyParse ' + VERSION)
+        self.root.title('LazyParse')
         self.app_icon = tk.PhotoImage(master=self.root, file=Path(__file__).with_name('assets') / 'icon.png')
         self.root.iconphoto(True, self.app_icon)
         self.root.configure(bg=LINE)
@@ -302,6 +302,8 @@ class Application:
         parsing.add_separator()
         parsing.add_command(label='攻撃名CSVを開く', command=self.open_attack_csv)
         parsing.add_command(label='攻撃名CSVを再読込', command=self.reload_attack_names)
+        parsing.add_command(label='除外する攻撃CSVを開く', command=self.open_exclusion_csv)
+        parsing.add_command(label='除外する攻撃CSVを再読込', command=self.reload_exclusions)
         parsing.add_command(label='クエスト名CSVを開く', command=self.open_quest_csv)
         parsing.add_command(label='クエスト名CSVを再読込', command=self.reload_quest_names)
         setup = self.setup_menu = self._menu('設定')
@@ -545,6 +547,24 @@ class Application:
         self.render()
         self.notify('攻撃名CSVを再読込しました。' if not catalog.error else
                     '攻撃名CSVに問題があります。取得状態・品質の辞書エラーを確認してください。')
+
+    def open_exclusion_csv(self):
+        try:
+            os.startfile(EXCLUSIONS_PATH)
+        except OSError as error:
+            self.last_error = str(error)
+            self.notify(f'除外する攻撃CSVを開けませんでした: {EXCLUSIONS_PATH}')
+
+    def reload_exclusions(self):
+        # Each measurement reads the file when it starts, so the running one
+        # keeps its setting; reopening a saved log re-aggregates with the new one.
+        ids, metadata = read_damage_exclusions()
+        if metadata['error']:
+            self.last_error = metadata['error']
+            self.notify('除外する攻撃CSVに問題があるため、初期設定（攻撃ID 0 のみ）を使います: ' + metadata['error'])
+        else:
+            self.notify(f'除外する攻撃CSVを確認しました（{len(ids)}件）。次の計測と、開き直した保存ログから反映されます。')
+        self.render()
 
     def open_attack_csv(self):
         try:
@@ -1034,6 +1054,7 @@ class Application:
         text.pack(fill='both', expand=True)
         text.insert('end', json.dumps({'state': self.snapshot.get('state'), 'capture': (self.snapshot.get('measurement') or {}).get('capture_path'),
             'quality': self.report.get('quality'), 'attack_catalog': get_catalog().metadata(), 'pending': self.snapshot.get('pending'),
+            'attack_exclusions': (self.report.get('aggregation_policy') or {}).get('configured_attack_exclusions'),
             'quest_measurement': self.report.get('quest_measurement'),
             'outside_quest_records': (self.snapshot.get('quest_view') or {}).get('outside_records'),
             'auto_save_error': self.snapshot.get('auto_save_error'),

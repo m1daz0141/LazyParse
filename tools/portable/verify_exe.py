@@ -41,7 +41,7 @@ def close_verified_window(process, executable, *, title=None):
                 return True
             window_title = ctypes.create_unicode_buffer(256)
             user.GetWindowTextW(handle, window_title, len(window_title))
-            if window_title.value != (title or 'LazyParse ' + VERSION):
+            if window_title.value != (title or 'LazyParse'):
                 return True
             pid = wintypes.DWORD()
             user.GetWindowThreadProcessId(handle, ctypes.byref(pid))

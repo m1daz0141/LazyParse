@@ -39,6 +39,7 @@ def initialize():
     seeds = {
         'quests.csv': BUNDLE / 'quests.csv',
         'skills.csv': BUNDLE / 'tools/attack_catalog/skills.csv',
+        'skills_exclusions.csv': BUNDLE / 'tools/attack_catalog/skills_exclusions.csv',
         'ja_exclusions.csv': BUNDLE / 'tools/combat_core/data/ja_exclusions.csv',
         'preferences.json': BUNDLE / 'tools/gui/state/preferences.json',
     }
@@ -66,3 +67,4 @@ def initialize():
     for source in (BUNDLE / 'licenses').rglob('*'):
         if source.is_file():
             copy_missing(source, CONFIG / 'licenses' / source.relative_to(BUNDLE / 'licenses'))
+

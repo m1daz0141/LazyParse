@@ -18,7 +18,7 @@ SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b8612
 SUPPORTED_CLASSICS = frozenset({SUPPORTED_CLASSIC,
     'b434e9e245a1ba02a71fefb360c5a25b6063b616a474da4ba0fca4867ad7f3e3',
     'dd25110b8c1e7e788a4df5d329567bedd21cefcf5e87379ba0076ae055464f03'})
-RULE_VERSION = 12
+RULE_VERSION = 13
 TIMED_GAP_FLAGS = {'binding_gap', 'identity_context_binding_reset'}
 # This adjacent pair was observed only for 1132. Other observed return layouts
 # have their own scoped rules; incapacitation alone is not a universal end.
@@ -42,29 +42,37 @@ CLEAR_PATTERNS = (
     (((0xb, 0x26), 24), ((0xb, 0xed), 24), ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
     (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xed), 24),
            ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
-    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xf1), 20),
-           ((0xb, 0xcf), 32), ((0xb, 0xfe), 44), ((0xb, 0xff), 48),
-           ((0xb, 0xfc), 11680), ((0xb, 0xf1), 20), ((0xb, 0xf1), 20),
-           ((0xb, 0xcc), 24), ((0xb, 0x11), 36)),
-    # Step 30: same complete final-result sequence, with an observed shorter
-    # 0b:fc body. Intermediate stages also use 11600; size alone is not an end.
-    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xf1), 20),
-           ((0xb, 0xcf), 32), ((0xb, 0xfe), 44), ((0xb, 0xff), 48),
-           ((0xb, 0xfc), 11600), ((0xb, 0xf1), 20), ((0xb, 0xf1), 20),
-           ((0xb, 0xcc), 24), ((0xb, 0x11), 36)),
 )
+# Divide final stage (Step 5/25/30 observed: 0b:fc 11332/11680/11600 bytes).
+# The 0b:fc body size differs per step, so only that size is a wildcard; the
+# complete adjacent sequence (with 0b:ff/0b:cc and the ob_3200_0041 spawn) is
+# still required. Intermediate stages send 0b:fc without this final sequence.
+DIVIDE_FINAL = (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xf1), 20),
+    ((0xb, 0xcf), 32), ((0xb, 0xfe), 44), ((0xb, 0xff), 48),
+    ((0xb, 0xfc), None), ((0xb, 0xf1), 20), ((0xb, 0xf1), 20),
+    ((0xb, 0xcc), 24), ((0xb, 0x11), 36))
+# The Divide final result arrives after a ~16 s defeat cut-scene and a map
+# transfer; its time ends at the last player hit (the defeating blow) instead.
+DIVIDE_KILL_WINDOW_SECONDS = 60
+
+
+def _shape_matches(shapes, pattern):
+    return len(shapes) <= len(pattern) and all(
+        shape[0] == expected[0] and expected[1] in (None, shape[1]) for shape, expected in zip(shapes, pattern))
 
 
 class ClearNotice:
     """Complete observed success layouts, shared across quest IDs."""
     def __init__(self, frequency):
         self.frequency = frequency
+        self.divide_final = False
         self.reset()
 
     def reset(self):
         self.events = []
 
     def feed(self, event):
+        self.divide_final = False  # Set with a returned match of the Divide final layout.
         shape = (event.packet_id, event.packet_size)
         if shape == ((0xb, 0x26), 24):
             self.events = [event]
@@ -83,11 +91,14 @@ class ClearNotice:
                 return None
         self.events.append(event)
         shapes = tuple((e.packet_id, e.packet_size) for e in self.events)
-        if shapes in CLEAR_PATTERNS:
+        divide = len(shapes) == len(DIVIDE_FINAL) and _shape_matches(shapes, DIVIDE_FINAL)
+        if shapes in CLEAR_PATTERNS or divide:
+            self.divide_final = divide
             sequences = [e.sequence for e in self.events]
             self.reset()
             return sequences
-        if not any(shapes == pattern[:len(shapes)] for pattern in CLEAR_PATTERNS):
+        if not (any(shapes == pattern[:len(shapes)] for pattern in CLEAR_PATTERNS)
+                or _shape_matches(shapes, DIVIDE_FINAL)):
             self.reset()
         return None
 
@@ -157,6 +168,8 @@ class QuestBucket:
         self.failure_notice_sequence = None
         self.failure_return_pair_sequences = None
         self.campship_return_sequences = None
+        self.divide_final = False
+        self.last_player_hit_qpc = None
         self.local_flags = set()
         self.engine = CombatEngine(owner.idle_seconds)
         # The parent stream validates global sequence continuity; a logical
@@ -173,18 +186,30 @@ class QuestBucket:
     def feed(self, event):
         self.timeline.events = self.owner.identities
         self.timeline.before(event, self.engine)
-        self.engine.feed(event)
+        audit = self.engine.feed(event)
+        if audit and audit['included_in_damage'] and audit['credited_source']['kind'] == 'player':
+            self.last_player_hit_qpc = max(event.qpc, self.last_player_hit_qpc or event.qpc)
+
+    def time_end(self):
+        """Divide final: the defeating blow, not the result after the cut-scene."""
+        if (self.divide_final and self.end is not None and self.last_player_hit_qpc is not None
+                and 0 <= self.end - self.last_player_hit_qpc <= DIVIDE_KILL_WINDOW_SECONDS * self.owner.frequency):
+            return self.last_player_hit_qpc, 'last_player_hit_before_divide_final_clear'
+        return None, None
 
     def report(self):
         through = min(self.owner.through, self.end) if self.end is not None else self.owner.through
         self.engine.observe_time(through, self.owner.frequency)
+        kill_qpc, kill_evidence = self.time_end()
+        if kill_qpc is not None:
+            through = kill_qpc
         result = self.engine.snapshot()
         timing = result['timing']
         # Do not advance the attribution timeline or finish the engine here:
         # late-published damage must still use identities at the hit's own QPC.
         for span in timing['spans']:
             span['end_qpc'] = max(span['first_damage_qpc'], through)
-            span['end_evidence'] = self.reason if self.end is not None else 'latest_observed_qpc'
+            span['end_evidence'] = kill_evidence or (self.reason if self.end is not None else 'latest_observed_qpc')
         elapsed = sum((s['end_qpc'] - s['first_damage_qpc']) / s['qpc_frequency'] for s in timing['spans'])
         timing.update(elapsed_seconds=elapsed, dps=included_totals(result)['positive_sum'] / elapsed if elapsed else None,
                       quest_end_detection=self.reason or 'quest_measurement_in_progress')
@@ -206,6 +231,7 @@ class QuestBucket:
             'start_notice_sequence': self.start_sequence, 'end_notice_sequence': self.end_sequence,
             'clear_pair_sequences': self.clear_pair_sequences, 'result_notice_sequence': self.result_sequence,
             'clear_notice_sequences': self.clear_notice_sequences,
+            'time_end_qpc': kill_qpc, 'time_end_evidence': kill_evidence,
             'failure_notice_sequence': self.failure_notice_sequence,
             'failure_return_pair_sequences': self.failure_return_pair_sequences,
             'campship_return_sequences': self.campship_return_sequences,
@@ -320,6 +346,7 @@ class QuestSession:
         if clear_sequences and self.active.kind == 'quest':
             world, quest = self.active.world, self.active.quest
             self.active.clear_notice_sequences = clear_sequences
+            self.active.divide_final = self.clear_notice.divide_final
             self.active.clear_pair_sequences = [clear_sequences[0], clear_sequences[-1]]
             self._close(event.qpc, 'clear_candidate', event.sequence)
             self._new(event.qpc, 'after_clear', world, quest).start_sequence = event.sequence

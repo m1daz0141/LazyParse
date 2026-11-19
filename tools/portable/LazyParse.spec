@@ -19,6 +19,7 @@ resources = [
     ('tools/gui/assets/icon.png', 'tools/gui/assets'),
     ('quests.csv', '.'),
     ('tools/attack_catalog/skills.csv', 'tools/attack_catalog'),
+    ('tools/attack_catalog/skills_exclusions.csv', 'tools/attack_catalog'),
     ('tools/combat_core/data/ja_exclusions.csv', 'tools/combat_core/data'),
     ('tools/portable/bin/build.json', 'tools/portable/bin'),
     ('tools/portable/bin/Capture.dll', 'tools/portable/bin'),

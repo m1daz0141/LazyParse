@@ -7,7 +7,7 @@ import math
 from .model import IdentityRegistry
 from .hit_flags import read_ja_exclusions
 from .hit_rates import HitRates, classify_hit, rate_policy
-from .damage_policy import BURN_ATTACK_IDS, SOURCE_ZERO_BURN, ZERO_ATTACK_ID, exclusion_reason
+from .damage_policy import BURN_ATTACK_IDS, SOURCE_ZERO_BURN, CONFIGURED_EXCLUSION, exclusion_reason, read_damage_exclusions
 from ..attack_catalog.catalog import get_catalog, with_attack_names
 
 
@@ -90,6 +90,8 @@ class CombatEngine:
         self.first_event_filetime = None
         self.last_event_filetime = None
         self.ja_ignored_ids, self.ja_ignore_metadata = read_ja_exclusions()
+        # Read once per measurement, so one interval never mixes two settings.
+        self.excluded_attack_ids, self.attack_exclusion_metadata = read_damage_exclusions()
 
     def begin_segment(self, capture_id, registry=None, quality_flags=(), *, first_sequence=1):
         if not capture_id or capture_id == self.capture_id:
@@ -194,7 +196,7 @@ class CombatEngine:
         hit_flags = classify_hit({'packet_hex': event.packet_hex, 'source': source,
                                  'attack_id': event.attack_id, 'signed_value': event.value}, self.ja_ignored_ids)
         direction = self.direction(credit, target, event.source == event.target)
-        excluded = exclusion_reason(event)
+        excluded = exclusion_reason(event, self.excluded_attack_ids)
         included = excluded is None
         if not event.source.object_id or not event.attack_id:
             self.quality_flags.add("zero_source_or_attack_id")
@@ -302,8 +304,8 @@ class CombatEngine:
                 "hit_rate_policy": rate_policy(self.ja_ignore_metadata),
                 "aggregation_policy": {"non_positive_values": "excluded_before_aggregation",
                     "negative_value_classification": "healing_candidate", "raw_signed_values_preserved": True,
-                    "zero_attack_positive_values": "excluded_before_aggregation",
-                    "zero_attack_exclusion_reason": ZERO_ATTACK_ID,
+                    "configured_attack_exclusions": dict(self.attack_exclusion_metadata),
+                    "configured_attack_exclusion_reason": CONFIGURED_EXCLUSION,
                     "source_zero_burn": "excluded_before_aggregation",
                     "source_zero_burn_ids": sorted(BURN_ATTACK_IDS),
                     "source_zero_burn_exclusion_reason": SOURCE_ZERO_BURN,

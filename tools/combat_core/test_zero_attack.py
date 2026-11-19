@@ -1,7 +1,11 @@
 from copy import deepcopy
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
-from .damage_policy import ZERO_ATTACK_ID
+from . import damage_policy
+from .damage_policy import CONFIGURED_EXCLUSION, parse_exclusions, read_damage_exclusions
 from .engine import CombatEngine
 from .test_combat_core import SELF, OTHER, ENEMY, PET, ObjectRef, registry, packet, events, engine
 from ..gui.timing import with_dps_mode
@@ -28,7 +32,7 @@ class ZeroAttackTests(unittest.TestCase):
         self.assertFalse(result['attacks'])
         self.assertFalse(result['encounters'])
         self.assertFalse(result['timing']['spans'])
-        self.assertTrue(all(event['exclusion_reason'] == ZERO_ATTACK_ID for event in audit))
+        self.assertTrue(all(event['exclusion_reason'] == CONFIGURED_EXCLUSION for event in audit))
         self.assertTrue(all(not event['included_in_damage'] for event in audit))
         self.assertEqual([event['packet_hex'] for event in audit], [row[2].hex() for row in rows])
         self.assertFalse(result['quality']['sequence_gaps'])
@@ -60,6 +64,39 @@ class ZeroAttackTests(unittest.TestCase):
                 self.assertAlmostEqual(own['dps'], 400 / elapsed)
                 self.assertNotIn('0x00000000', render_text(result, dps_mode=mode))
         self.assertEqual(result, before)
+
+
+class AttackExclusionCsvTests(unittest.TestCase):
+    def test_bundled_default_lists_only_attack_zero_with_headers(self):
+        text = damage_policy.DEFAULT_EXCLUSIONS_PATH.read_text(encoding='utf-8-sig')
+        self.assertTrue(text.startswith('(comments),(attack_id)'))
+        self.assertEqual(parse_exclusions(text), [0])
+
+    def test_parse_formats_and_errors(self):
+        text = ('(comments),(attack_id)\n\n攻撃ID 0,0\n"備考, カンマ入り",0x0000002A\nギミック,123456789,\n')
+        self.assertEqual(parse_exclusions(text), [0, 42, 123456789])
+        for bad in ('名前,abc\n', '名前,1,2\n', '名前,4294967296\n', '0\n', '名前,-1\n'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_exclusions(bad)
+
+    def test_user_file_applies_to_every_source_and_broken_file_falls_back(self):
+        with tempfile.TemporaryDirectory() as work:
+            path = Path(work) / 'skills_exclusions.csv'
+            path.write_text('(comments),(attack_id)\nテスト除外,99\n', encoding='utf-8-sig')
+            with patch.object(damage_policy, 'EXCLUSIONS_PATH', path):
+                rows = [(1, 0, packet(value=100, attack=99)), (2, 1000, packet(source=OTHER, value=50, attack=99)),
+                        (3, 2000, packet(value=7, attack=0)), (4, 3000, packet(value=30, attack=98))]
+                result = engine(rows, registry()).finish(4000, 1000)
+                self.assertEqual(result['damage_totals']['positive_sum'], 37)  # ID 0 no longer listed.
+                self.assertEqual({(g['attack_id'], g['reason']) for g in result['damage_totals']['excluded_groups']},
+                                 {(99, CONFIGURED_EXCLUSION)})
+                policy = result['aggregation_policy']['configured_attack_exclusions']
+                self.assertEqual((policy['attack_ids'], policy['error']), ([99], None))
+                path.write_text('壊れた行,1,2\n', encoding='utf-8')
+                ids, metadata = read_damage_exclusions()
+                self.assertEqual(ids, frozenset({0}))
+                self.assertEqual(metadata['fallback'], 'bundled_default')
+                self.assertIn('2列', metadata['error'])
 
 
 if __name__ == '__main__':

@@ -173,7 +173,16 @@ class AttributionTests(unittest.TestCase):
         self.assertEqual(audit[0]["value_kind"], "healing_candidate")
         self.assertFalse(audit[0]["included_in_damage"])
         self.assertEqual(report["negative_values"][0]["signed_sum"], -30)
-        self.assertIn("zero_source_or_attack_id", report["quality"]["flags"])
+        # Attack ID 0 is excluded by the default CSV, so it is not a warning.
+        self.assertNotIn("zero_source_or_attack_id", report["quality"]["flags"])
+
+    def test_zero_id_warning_only_for_counted_damage_dealt(self):
+        def flags(*rows):
+            return engine([(n, n * 1000, data) for n, data in enumerate(rows, 1)], registry()).finish()["quality"]["flags"]
+        unknown = ObjectRef(0, 6, 8)
+        self.assertEqual([], flags(packet(source=unknown, target=SELF, value=90)))
+        self.assertEqual([], flags(packet(source=unknown, value=90, attack=min(BURN_ATTACK_IDS))))
+        self.assertEqual(["zero_source_or_attack_id"], flags(packet(source=unknown, value=90)))
 
 
 class NameOwnershipTests(unittest.TestCase):
@@ -543,7 +552,8 @@ class LiveCaptureRegressionTests(unittest.TestCase):
                  if decision["action"] == "register_entity" and decision.get("kind") == "enemy"
                  and decision["object"]["object_id"] == 303 and decision["qpc"] <= first["qpc"]]
         self.assertLess(spawn[-1]["qpc"], report["identity_context"]["reference"]["start_qpc"])
-        self.assertEqual(report["quality"]["flags"], ["zero_source_or_attack_id"])
+        # Its zero-ID records are attack ID 0 (excluded), so no warning remains.
+        self.assertEqual(report["quality"]["flags"], [])
         self.assertEqual(report, replay(capture, chunk_size=11))
         with contextlib.redirect_stdout(StringIO()):
             followed = follow(capture, IdentityRegistry(), 10, lambda event: None)

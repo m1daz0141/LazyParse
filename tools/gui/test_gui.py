@@ -228,6 +228,16 @@ class WindowTests(unittest.TestCase):
                 self.assertIn('"ja_excluded_hits": 13', detail.info.get('1.0', 'end'))
                 self.assertIn('23.08%', detail.label.cget('text'))
                 self.assertEqual(len(detail.sources.get_children()), 2)
+                self.assertEqual(first[3], '対象')
+                hits = lambda: [int(detail.attacks.item(item, 'values')[6]) for item in detail.attacks.get_children()]
+                detail.sort_by(detail.attacks, 'hits')
+                self.assertEqual(hits(), sorted(hits(), reverse=True))
+                self.assertTrue(detail.attacks.heading('hits', 'text').endswith('▼'))
+                detail.sort_by(detail.attacks, 'hits')
+                self.assertEqual(hits(), sorted(hits()))
+                ordered = hits()
+                detail.refresh(app.report, next(row for row in app.rows if row['key'] == app.selected))
+                self.assertEqual(hits(), ordered)  # Live refresh keeps the chosen order.
                 app._clear_notice()
                 self.assertEqual([button.cget('text') for button in app.menu_holder.winfo_children()],
                      ['計測', '解析', '設定', '表示', 'ログ'])

@@ -12,7 +12,7 @@ from .viewmodel import COLUMNS, number, percentage, actor_rows, attack_rows, sou
 from .timing import with_dps_mode, DPS_MODES
 from ..attack_catalog.catalog import attack_label, get_catalog, with_attack_names, EDITABLE_CSV
 from ..combat_core.quest_catalog import QUESTS_CSV, get_quest_catalog, quest_label
-from ..combat_core.damage_policy import EXCLUSIONS_PATH, read_damage_exclusions
+from ..combat_core.damage_policy import EXCLUSIONS_PATH, dps_damage, read_damage_exclusions
 from .text_export import EXPORT_DIRECTORY, filename
 from .backend import stored_history, history_key
 from .control import preparation_error
@@ -63,19 +63,31 @@ class Tooltip:
         self.timer = self.root.after(600, open_tip)
 
 
+COUNTED_ORDER = {'対象': 0, '一部対象外': 1, '対象外': 2}
+
+
+def counted_label(attack):
+    """Whether an attack's damage counts in the list and DPS (HP-unlinked hits do not)."""
+    unlinked = attack.get('hp_unlinked_damage', 0)
+    return '対象' if not unlinked else '対象外' if unlinked >= attack['damage_dealt'] else '一部対象外'
+
+
 class DetailWindow:
     def __init__(self, parent, report, actor):
         self.window = tk.Toplevel(parent)
         self.window.withdraw()
         self.window.title(actor['name'] + ' — LazyParse')
-        self.window.geometry('1040x355')
+        self.window.geometry('1120x355')
         self.window.configure(bg=BG)
         self.label = tk.Label(self.window, bg=BG, fg=TEXT, anchor='w', padx=10, pady=9, font=('Meiryo UI', 10))
         self.label.pack(fill='x')
         notebook = self.notebook = ttk.Notebook(self.window)
         notebook.pack(fill='both', expand=True, padx=8, pady=(0, 8))
+        self.sort_state = {}   # tree -> (column, descending)
+        self.sort_values = {}  # tree -> {item: {column: raw value}}
+        self.titles = {}       # tree -> {column: heading text}
         self.attacks = self._table(notebook, '攻撃別', [('name', 'Attack', 205), ('id', 'Attack ID', 112),
-            ('kind', '種別', 70), ('damage', 'Damage', 95), ('share', '%', 58), ('hits', 'Hits', 55),
+            ('kind', '種別', 70), ('counted', '対象', 80), ('damage', 'Damage', 95), ('share', '%', 58), ('hits', 'Hits', 55),
             ('max', 'Max Hit', 84), ('dps', 'DPS', 82), ('ja', 'JA %', 60), ('crit', 'Crit %', 60)])
         self.sources = self._table(notebook, '発生元', [('name', 'Name / ID', 220), ('damage', 'Damage', 110),
                                                       ('key', 'Source', 220)])
@@ -92,9 +104,11 @@ class DetailWindow:
     def _table(self, notebook, title, columns):
         frame = tk.Frame(notebook, bg=BG)
         tree = ttk.Treeview(frame, columns=[key for key, _, _ in columns], show='headings', style='LazyParse.Treeview')
+        self.titles[tree] = {key: name for key, name, _ in columns}
+        self.sort_values[tree] = {}
         for key, name, width in columns:
-            tree.heading(key, text=name)
-            tree.column(key, width=width, minwidth=45, anchor='w' if key in {'name', 'id', 'key', 'kind'} else 'e')
+            tree.heading(key, text=name, command=lambda key=key, tree=tree: self.sort_by(tree, key))
+            tree.column(key, width=width, minwidth=45, anchor='w' if key in {'name', 'id', 'key', 'kind', 'counted'} else 'e')
         scroll = ttk.Scrollbar(frame, orient='vertical', command=tree.yview, style='LazyParse.Vertical.TScrollbar')
         tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
@@ -102,20 +116,60 @@ class DetailWindow:
         notebook.add(frame, text=title)
         return tree
 
+    def sort_by(self, tree, column):
+        """Heading click: sort by this column; a second click reverses it."""
+        previous, descending = self.sort_state.get(tree, (None, False))
+        text_column = column in {'name', 'id', 'key', 'kind', 'counted'}
+        descending = not descending if previous == column else not text_column
+        self.sort_state[tree] = (column, descending)
+        self._apply_sort(tree)
+
+    def _apply_sort(self, tree):
+        if tree not in self.sort_state:
+            return
+        column, descending = self.sort_state[tree]
+        values = self.sort_values[tree]
+        items = list(tree.get_children())
+        # Rows without a value (—) stay last in either direction.
+        present = sorted((item for item in items if values[item][column] is not None),
+                         key=lambda item: values[item][column], reverse=descending)
+        for index, item in enumerate(present + [item for item in items if values[item][column] is None]):
+            tree.move(item, '', index)
+        for key, name in self.titles[tree].items():
+            tree.heading(key, text=name + (' ▼' if descending else ' ▲') if key == column else name)
+
+    def _insert(self, tree, raw, shown):
+        item = tree.insert('', 'end', values=shown)
+        self.sort_values[tree][item] = raw
+
     def refresh(self, report, actor):
-        self.label.configure(text=f"{actor['name']}    Damage {actor['damage_dealt']:,}    DPS {number(actor['dps'], 1)}    Hits {actor['hits_dealt']}"
-                                 f"    JA {percentage(actor['ja'])}    Crit {percentage(actor['crit'])}")
+        unlinked = actor.get('hp_unlinked_damage', 0)
+        whole = actor.get('total_damage_dealt', actor['damage_dealt'])
+        self.label.configure(text=f"{actor['name']}    Damage {whole:,}    DPS {number(actor['dps'], 1)}    Hits {actor['hits_dealt']}"
+                                 f"    JA {percentage(actor['ja'])}    Crit {percentage(actor['crit'])}"
+                                 + (f"    HP非連動 {unlinked:,}（一覧・DPS対象外）" if unlinked else ''))
         for tree in (self.attacks, self.sources):
             tree.delete(*tree.get_children())
+            self.sort_values[tree].clear()
         elapsed = display_elapsed(report)
         for attack in attack_rows(report, actor):
-            self.attacks.insert('', 'end', values=(attack_label(attack['attack_id']), f"0x{attack['attack_id']:08X}",
-                attack['attack_kind'] or '—', number(attack['damage_dealt']),
-                f"{attack['damage_dealt'] * 100 / actor['damage_dealt']:.1f}" if actor['damage_dealt'] else '—',
-                attack['hits_dealt'], number(attack['max_hit']), number(attack['damage_dealt'] / elapsed if elapsed else None, 1),
+            name = attack_label(attack['attack_id'])
+            counted = counted_label(attack)
+            share = attack['damage_dealt'] * 100 / whole if whole else None
+            dps = dps_damage(attack) / elapsed if elapsed else None
+            raw = {'name': name, 'id': attack['attack_id'], 'kind': attack['attack_kind'] or '',
+                   'counted': COUNTED_ORDER[counted], 'damage': attack['damage_dealt'], 'share': share,
+                   'hits': attack['hits_dealt'], 'max': attack['max_hit'], 'dps': dps,
+                   'ja': attack['ja'], 'crit': attack['crit']}
+            self._insert(self.attacks, raw, (name, f"0x{attack['attack_id']:08X}", attack['attack_kind'] or '—', counted,
+                number(attack['damage_dealt']), f'{share:.1f}' if share is not None else '—',
+                attack['hits_dealt'], number(attack['max_hit']), number(dps, 1),
                 number(attack['ja'], 1), number(attack['crit'], 1)))
         for source in source_rows(report, actor):
-            self.sources.insert('', 'end', values=(source['name'], number(source['damage']), source['source_key']))
+            self._insert(self.sources, {'name': source['name'] or '', 'damage': source['damage'], 'key': source['source_key']},
+                         (source['name'], number(source['damage']), source['source_key']))
+        for tree in (self.attacks, self.sources):
+            self._apply_sort(tree)
         self.info.configure(state='normal')
         self.info.delete('1.0', 'end')
         self.info.insert('end', json.dumps({'name': actor['name'], 'object_id': actor['object_id'], 'role': actor['role'],
@@ -252,6 +306,7 @@ class Application:
         self.header.bind('<ButtonRelease-1>', self._header_release)
         self.header.bind('<Double-Button-1>', lambda event: self._column_border(event.x) is not None and self.reset_column_widths())
         self.header.bind('<Motion>', self._header_tip)
+        self.header.bind('<Button-3>', self._header_menu)
         self.header.bind('<Leave>', self.tooltip.hide)
         footer = tk.Frame(inner, bg=BG)
         footer.pack(side='bottom', fill='x', before=self.body_frame)
@@ -365,11 +420,16 @@ class Application:
         if roles is None:
             roles = {}
             for option in ('background', 'foreground', 'activebackground', 'activeforeground',
-                           'disabledforeground', 'insertbackground', 'selectbackground', 'selectforeground'):
-                if option not in widget.keys():
+                           'disabledforeground', 'insertbackground', 'selectbackground', 'selectforeground',
+                           'selectcolor'):
+                if option not in widget.keys() or option == 'selectcolor' and not isinstance(widget, tk.Menu):
                     continue
                 value = str(widget.cget(option)).lower()
-                if value in self.colors:
+                if option == 'selectcolor':
+                    # Menu check marks default to the system's black menu text,
+                    # which only shows on the hover color; draw them as text.
+                    roles[option] = TEXT
+                elif value in self.colors:
                     roles[option] = value
                 elif value.startswith('system'):
                     roles[option] = TEXT if 'foreground' in option else PANEL if 'active' in option else BG
@@ -492,7 +552,6 @@ class Application:
             initialdir=self.settings.game_directory or None, mustexist=True)
         if folder:
             self.busy = True
-            self.notify('ゲームの版と配置先を確認しています…')
             self.backend.submit('InstallLoader', path=folder)
         else:
             self.notify('DLLを配置していません。「設定」から再選択できます。保存ログの閲覧は可能です。')
@@ -601,11 +660,13 @@ class Application:
                 self.saved = event['snapshot']
                 saved_report = (self.saved.get('measurement') or {}).get('report', {})
                 selected_report = with_dps_mode(saved_report, self.settings.dps_mode)
-                self.notify('選択した方式の時間情報がありません。元OPCAPを開いてください。' if
-                            display_elapsed(selected_report) is None else
-                            '保存ログを表示しています。')
+                if display_elapsed(selected_report) is None:
+                    self.notify('選択した方式の時間情報がありません。元OPCAPを開いてください。')
+                else:
+                    self._clear_notice()
             else:
-                self.notify(event['message'])
+                if event.get('message'):
+                    self.notify(event['message'])
                 if event['type'] == 'loader_installed':
                     self.settings.game_directory = event['folder']
                     try:
@@ -726,6 +787,7 @@ class Application:
         for key, title, x, end in layout:
             if key == self.sort_key:
                 title += ' ▾' if self.descending else ' ▴'
+            title = self._elide(title, max(1, end - x - 10), current_font)
             self.header.create_text(x + 6 if key == 'name' else end - 6, 11, text=title, fill=c[MUTED],
                                     anchor='w' if key == 'name' else 'e', font=current_font)
         self.header.create_line(0, 22, self.header.winfo_width(), 22, fill=c[LINE])
@@ -771,7 +833,7 @@ class Application:
             text += f'    ⚠ {len(flags)}'
         if self.report.get('quest_measurement', {}).get('kind') == 'quest' and not self.notice:
             text += '    ' + quest_label(self.report)
-        outside = (snapshot.get('quest_view') or {}).get('outside_records', 0)
+        outside = (snapshot.get('quest_view') or {}).get('outside_player_hits', 0)
         if outside and measurement.get('quest_id') and not self.notice:
             text += f'    別枠 {outside}件'
         self.summary.configure(text=text)
@@ -837,16 +899,24 @@ class Application:
         total = sum(self.settings.column_widths.get(key, width) for key, _, width in COLUMNS
                     if key in self.settings.columns)
         scale = layout[-1][3] / total
-        (left, _, start, _), (right, _, _, end) = layout[index], layout[index + 1]
-        self.column_drag = (left, right, start, end, scale)
+        (left, left_title, start, _), (right, right_title, _, end) = layout[index], layout[index + 1]
+        self.column_drag = (left, right, start, end, scale,
+                            self._column_min_width(left_title), self._column_min_width(right_title))
+
+    def _column_min_width(self, title):
+        """Narrowest width that still shows the header title and a sort arrow."""
+        current_font = self.fonts.get(self.settings.font_size, (None,))[0]
+        if current_font is None:
+            return COLUMN_MIN_WIDTH
+        return max(COLUMN_MIN_WIDTH, current_font.measure(title + ' ▾') + 12)
 
     def _header_drag(self, event):
         if not self.column_drag:
             return
-        left, right, start, end, scale = self.column_drag
-        border = min(max(event.x, start + COLUMN_MIN_WIDTH), end - COLUMN_MIN_WIDTH)
-        if end - start < 2 * COLUMN_MIN_WIDTH:
+        left, right, start, end, scale, left_min, right_min = self.column_drag
+        if end - start < left_min + right_min:
             return
+        border = min(max(event.x, start + left_min), end - right_min)
         # The pair keeps its combined width, so the other columns stay put.
         self.settings.column_widths[left] = (border - start) / scale
         self.settings.column_widths[right] = (end - border) / scale
@@ -874,10 +944,24 @@ class Application:
                     message = ('この方式の時間情報がありません。元OPCAPを開いて再集計してください。' if display_elapsed(self.report) is None else
                                '正値ダメージの最初～最後の区間を合算して割ります。10秒以上の空白で別区間になります。' if self.settings.dps_mode == 'damage' else
                                '最初の与ダメージから計測終了までの連続時間で割ります。無攻撃・移動時間も含みます。')
+                elif key == 'attack':
+                    message = '最大ヒットの攻撃名。行にカーソルを合わせると名前・ID・種別を表示します。'
                 else:
-                    message = '最大ヒットの攻撃名。行にカーソルを合わせると名前・ID・種別を表示します。' if key == 'attack' else 'クリックで並び替え'
+                    break
                 self.tooltip.show(message, event.x_root, event.y_root)
-                break
+                return
+        self.tooltip.hide()
+
+    def _header_menu(self, event):
+        self.tooltip.hide()
+        menu = tk.Menu(self.root, tearoff=False)
+        for key, label, _ in COLUMNS:
+            menu.add_checkbutton(label=label, variable=self.column_vars[key], command=self._columns_changed,
+                                 state='disabled' if key == 'name' else 'normal')
+        menu.add_separator()
+        menu.add_command(label='列幅を元に戻す', command=self.reset_column_widths)
+        self._theme_widgets(menu)
+        menu.tk_popup(event.x_root, event.y_root)
 
     def _row_tip(self, event):
         index = int(self.table.canvasy(event.y) // self.row_height)
@@ -928,7 +1012,7 @@ class Application:
         self.saved = None
         self.selected = None
         self.snapshot = self.latest
-        self.notify('最新の取得状態に追従します。')
+        self._clear_notice()
         self.render()
 
     def open_history(self):
@@ -960,7 +1044,8 @@ class Application:
             tree.heading(key, text=text)
             tree.column(key, width=width)
         for index, entry in enumerate(history):
-            damage = entry.get('roles', {}).get('self', {}).get('damage_dealt', 0)
+            role = entry.get('roles', {}).get('self')
+            damage = dps_damage(role) if role else 0
             tree.insert('', 'end', iid=str(index), values=(entry['run_name'], entry['segment_number'], number(damage),
                 entry.get('display_state') or ('完了' if entry.get('complete') else '未完了')))
         tree.pack(fill='both', expand=True)
@@ -1057,6 +1142,7 @@ class Application:
             'attack_exclusions': (self.report.get('aggregation_policy') or {}).get('configured_attack_exclusions'),
             'quest_measurement': self.report.get('quest_measurement'),
             'outside_quest_records': (self.snapshot.get('quest_view') or {}).get('outside_records'),
+            'outside_quest_player_hits': (self.snapshot.get('quest_view') or {}).get('outside_player_hits'),
             'auto_save_error': self.snapshot.get('auto_save_error'),
             'text_export_error': self.snapshot.get('text_export_error'),
             'quest_catalog_error': get_quest_catalog().error,

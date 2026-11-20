@@ -7,7 +7,9 @@ import math
 from .model import IdentityRegistry
 from .hit_flags import read_ja_exclusions
 from .hit_rates import HitRates, classify_hit, rate_policy
-from .damage_policy import BURN_ATTACK_IDS, SOURCE_ZERO_BURN, CONFIGURED_EXCLUSION, exclusion_reason, read_damage_exclusions
+from .damage_policy import (BURN_ATTACK_IDS, SOURCE_ZERO_BURN, CONFIGURED_EXCLUSION, dps_damage, dps_total, exclusion_reason,
+                            read_damage_exclusions)
+from .hp_link import HpLinkTracker
 from ..attack_catalog.catalog import get_catalog, with_attack_names
 
 
@@ -20,13 +22,35 @@ class Totals:
     max_hit: int = 0
     min_hit: int | None = None
     hit_rates: HitRates = field(default_factory=HitRates)
+    # Hits on parts whose damage did not lower the target's HP; kept in
+    # damage_dealt but left out of DPS.
+    hp_unlinked_damage: int = 0
+    hp_unlinked_hits: int = 0
+    # Max Hit among hits that still count (HP-unlinked hits removed). A hit
+    # can be reclassified after the fact, so the counted values are kept.
+    rated_max_hit: int = 0
+    rated_values: Counter = field(default_factory=Counter, repr=False)
+
+    def add_rated(self, value):
+        self.rated_values[value] += 1
+        self.rated_max_hit = max(self.rated_max_hit, value)
+
+    def add_hp_unlinked(self, value):
+        self.hp_unlinked_damage += value
+        self.hp_unlinked_hits += 1
+        self.rated_values[value] -= 1
+        if not self.rated_values[value]:
+            del self.rated_values[value]
+            if value == self.rated_max_hit:
+                self.rated_max_hit = max(self.rated_values, default=0)
 
     def as_dict(self, elapsed, *, include_min=False):
         values = dict(vars(self))
+        values.pop('rated_values')
         if not include_min:
             values.pop('min_hit')
         return {**values, "hit_rates": self.hit_rates.as_dict(),
-                "dps": self.damage_dealt / elapsed if elapsed else None}
+                "dps": dps_damage(values) / elapsed if elapsed else None}
 
 
 @dataclass
@@ -82,6 +106,7 @@ class CombatEngine:
         self.sequence_gaps = []
         self.negative_groups = {}
         self.excluded_groups = {}
+        self.hp_link = HpLinkTracker()
         self.measurement_spans = []
         self.measurement_span = None
         self.measurement_now = None
@@ -198,7 +223,10 @@ class CombatEngine:
         direction = self.direction(credit, target, event.source == event.target)
         excluded = exclusion_reason(event, self.excluded_attack_ids)
         included = excluded is None
-        if not event.source.object_id or not event.attack_id:
+        # Warn only when such a record is counted as damage dealt: excluded IDs
+        # (attack ID 0, source-zero Burn), non-positive values and damage
+        # taken by players do not affect the totals shown.
+        if (not event.source.object_id or not event.attack_id) and included and event.target.entity_type != 4:
             self.quality_flags.add("zero_source_or_attack_id")
             self.quality_by_capture[self.capture_id].add("zero_source_or_attack_id")
         if event.value > 0:
@@ -224,6 +252,7 @@ class CombatEngine:
             dealt.damage_dealt += event.value
             dealt.hits_dealt += 1
             dealt.max_hit = max(dealt.max_hit, event.value)
+            dealt.add_rated(event.value)
             dealt.hit_rates.add_hit(hit_flags)
             taken = self._actor(event.target)
             taken.damage_taken += event.value
@@ -232,9 +261,21 @@ class CombatEngine:
             attack.damage_dealt += event.value
             attack.hits_dealt += 1
             attack.max_hit = max(attack.max_hit, event.value)
+            attack.add_rated(event.value)
             attack.min_hit = min(attack.min_hit, event.value) if attack.min_hit is not None else event.value
             attack.hit_rates.add_hit(hit_flags)
             self.raw_sources[(self.capture_id, self.registry.actor_key(event.source), self.registry.actor_key(credit_ref), event.attack_id)] += event.value
+            credits = (event.value, (dealt, attack))
+        else:
+            credits = None
+        for value, groups in self.hp_link.observe((self.capture_id, self.registry.actor_key(event.target)),
+                                                  event.packet_hex, credits, event.attack_id):
+            for group in groups:
+                group.add_hp_unlinked(value)
+            self.counts['hp_unlinked_records'] += 1
+            self.counts['hp_unlinked_sum'] += value
+        if included:
+            pass  # Aggregated above.
         elif event.value > 0:
             self.counts['excluded_positive_records'] += 1
             self.counts['excluded_positive_sum'] += event.value
@@ -284,9 +325,11 @@ class CombatEngine:
             info = self.actor_info[key]
             role = info["role"]
             aggregate = role_totals.setdefault(role, Totals())
-            for field_name in ("damage_dealt", "hits_dealt", "damage_taken", "hits_taken"):
+            for field_name in ("damage_dealt", "hits_dealt", "damage_taken", "hits_taken",
+                               "hp_unlinked_damage", "hp_unlinked_hits"):
                 setattr(aggregate, field_name, getattr(aggregate, field_name) + getattr(totals, field_name))
             aggregate.max_hit = max(aggregate.max_hit, totals.max_hit)
+            aggregate.rated_max_hit = max(aggregate.rated_max_hit, totals.rated_max_hit)
             aggregate.hit_rates.merge(totals.hit_rates)
             actors.append({"capture_id": key[0], **info, **totals.as_dict(elapsed)})
         counts = {name: self.counts[name] for name in ("records", "positive_records", "positive_sum",
@@ -295,6 +338,8 @@ class CombatEngine:
                     'positive_sum': counts['positive_sum'] - self.counts['excluded_positive_sum'],
                     'excluded_positive_records': self.counts['excluded_positive_records'],
                     'excluded_positive_sum': self.counts['excluded_positive_sum'],
+                    'hp_unlinked_records': self.counts['hp_unlinked_records'],
+                    'hp_unlinked_sum': self.counts['hp_unlinked_sum'],
                     'excluded_groups': [{'capture_id': capture, 'attack_id': attack,
                         'reason': reason, **value} for (capture, attack, reason), value in sorted(self.excluded_groups.items())]}
         return with_attack_names({"schema_version": 1, "counts": counts,
@@ -314,7 +359,7 @@ class CombatEngine:
                     "scene": self.registry.scene,
                     "entities": [self.registry.describe(ref) for ref in sorted(self.registry.entries)]},
                 "timing": {"idle_timeout_seconds": float(self.idle_seconds),
-                    "elapsed_seconds": elapsed, "dps": selected["positive_sum"] / elapsed if elapsed else None,
+                    "elapsed_seconds": elapsed, "dps": dps_total({'damage_totals': selected}) / elapsed if elapsed else None,
                     "definition": "continuous_from_first_player_damage_including_idle_and_map_time",
                     "spans": [dict(span) for span in self.measurement_spans],
                     "quest_end_detection": "not_yet_available_use_manual_stop",

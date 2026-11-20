@@ -78,3 +78,13 @@ def exclusion_reason(event, excluded_ids=frozenset()):
 def included_totals(report):
     """Old JSON lacks selection totals; only its original OPCAP can be refiltered."""
     return report.get('damage_totals', report.get('counts', {}))
+
+
+def dps_damage(group):
+    """Damage counted toward DPS: HP-unlinked part damage is shown but not rated."""
+    return group['damage_dealt'] - group.get('hp_unlinked_damage', 0)
+
+
+def dps_total(report):
+    totals = included_totals(report)
+    return totals.get('positive_sum', 0) - totals.get('hp_unlinked_sum', 0)

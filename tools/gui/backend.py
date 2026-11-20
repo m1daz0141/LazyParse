@@ -257,7 +257,7 @@ class Backend:
                 folder = self.deployment.install(path)
                 self.game_directory = folder
                 self.game_version_error = None
-                self.events.put({'type': 'loader_installed', 'folder': folder, 'message': '取得DLLの配置を完了しました。通常のランチャーからPSO2を起動できます。'})
+                self.events.put({'type': 'loader_installed', 'folder': folder, 'message': None})
             elif action == 'CheckLoader':
                 self.game_directory = path
                 try:
@@ -279,7 +279,7 @@ class Backend:
                 self.deployment.remove()
                 self.game_directory = None
                 self.game_version_error = None
-                self.events.put({'type': 'success', 'message': '追加した取得DLLを撤去しました。'})
+                self.events.put({'type': 'success', 'message': None})
             return
         if action == 'ExportText':
             report = ((requested or {}).get('measurement') or {}).get('report')

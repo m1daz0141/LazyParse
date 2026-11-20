@@ -2,7 +2,7 @@
 from collections import defaultdict
 from ..attack_catalog.catalog import attack_label, get_catalog
 from ..combat_core.hit_rates import HitRates
-from ..combat_core.damage_policy import included_totals
+from ..combat_core.damage_policy import dps_damage, included_totals
 from .control import preparation_error
 
 COLUMNS = [('name', 'Name', 112), ('share', '%', 38), ('damage_dealt', 'Damage', 76),
@@ -41,15 +41,23 @@ def actor_rows(report, *, players_only=True, only_me=False, anonymize=False, sor
         key = f"player:{actor['object_id']}" if actor['kind'] == 'player' else actor['actor_key']
         if key not in groups:
             groups[key] = {**actor, 'key': key, 'actor_keys': [], 'damage_dealt': 0, 'damage_taken': 0,
-                           'hits_dealt': 0, 'hits_taken': 0, 'max_hit': 0, 'hit_rates': HitRates()}
+                           'hits_dealt': 0, 'hits_taken': 0, 'max_hit': 0, 'hit_rates': HitRates(),
+                           'hp_unlinked_damage': 0, 'hp_unlinked_hits': 0}
         row = groups[key]
         row['actor_keys'].append(actor['actor_key'])
         if actor.get('name'):
             row['name'] = actor['name']
         for field in ('damage_dealt', 'damage_taken', 'hits_dealt', 'hits_taken'):
             row[field] += actor[field]
-        row['max_hit'] = max(row['max_hit'], actor['max_hit'])
+        for field in ('hp_unlinked_damage', 'hp_unlinked_hits'):
+            row[field] += actor.get(field, 0)
+        row['max_hit'] = max(row['max_hit'], actor.get('rated_max_hit', actor['max_hit']))
         row['hit_rates'].merge(HitRates.from_totals(actor))
+    # The list shows only damage that lowered the fought enemy's HP; the
+    # detail window keeps every hit (total_damage_dealt, attack_rows).
+    for row in groups.values():
+        row['total_damage_dealt'] = row['damage_dealt']
+        row['damage_dealt'] = dps_damage(row)
     total = sum(row['damage_dealt'] for row in groups.values())
     elapsed = display_elapsed(report)
     rows = []
@@ -75,8 +83,8 @@ def actor_rows(report, *, players_only=True, only_me=False, anonymize=False, sor
         row['ja'] = row['hit_rates']['ja_percent']
         row['crit'] = row['hit_rates']['crit_percent']
         attacks = attack_rows(report, row)
-        maximum = max(attacks, key=lambda attack: attack['max_hit'], default=None)
-        row['max_attack_id'] = maximum['attack_id'] if maximum and maximum['max_hit'] else None
+        maximum = max(attacks, key=lambda attack: attack['rated_max_hit'], default=None)
+        row['max_attack_id'] = maximum['attack_id'] if maximum and maximum['rated_max_hit'] else None
         row['attack'] = attack_label(row['max_attack_id']) if row['max_attack_id'] is not None else '—'
         rows.append(row)
     rows.sort(key=lambda row: (row.get(sort) is not None, row.get(sort) or 0, row['name']), reverse=descending)
@@ -91,10 +99,13 @@ def attack_rows(report, actor):
         key = attack['attack_id']
         row = merged.setdefault(key, {'attack_id': key, **get_catalog().labels(key),
                                      'damage_dealt': 0, 'hits_dealt': 0, 'max_hit': 0, 'min_hit': None,
-                                     'min_complete': True, 'hit_rates': HitRates()})
+                                     'min_complete': True, 'hit_rates': HitRates(), 'hp_unlinked_damage': 0,
+                                     'rated_max_hit': 0})
         row['damage_dealt'] += attack['damage_dealt']
+        row['hp_unlinked_damage'] += attack.get('hp_unlinked_damage', 0)
         row['hits_dealt'] += attack['hits_dealt']
         row['max_hit'] = max(row['max_hit'], attack['max_hit'])
+        row['rated_max_hit'] = max(row['rated_max_hit'], attack.get('rated_max_hit', attack['max_hit']))
         if attack['hits_dealt']:
             if attack.get('min_hit') is None:
                 row['min_complete'] = False

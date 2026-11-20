@@ -105,6 +105,22 @@ class QuestTests(unittest.TestCase):
         self.assertEqual(second['roles']['self']['damage_dealt'], 80)
         self.assertEqual(second['quest_measurement']['end_reason'], 'left_quest_without_clear')
 
+    def test_outside_intervals_without_player_damage_are_discarded_but_counted_in_records(self):
+        identities, damage = fixture()
+        session = self.session()
+        session.update(identities, damage, 3500, end_qpc=3500)
+        view = session.view()
+        # After the clear only an excluded ID-0 value; at the end only damage taken.
+        self.assertEqual([r['quest_measurement']['kind'] for r in view['history']], ['quest', 'quest'])
+        self.assertEqual((view['outside_records'], view['outside_player_hits']), (2, 0))
+        damage = events([(1, 150, packet(value=100)), (2, 3200, packet(value=40)), (3, 3300, packet(value=-5))])
+        session = self.session()
+        session.update(identities, damage, 3500, end_qpc=3500)
+        view = session.view()
+        outside = [r for r in view['history'] if r['quest_measurement']['kind'] != 'quest']
+        self.assertEqual([r['roles']['self']['damage_dealt'] for r in outside], [40])
+        self.assertEqual((view['outside_records'], view['outside_player_hits']), (2, 1))
+
     def test_late_damage_after_new_world_and_clear_updates_original_bucket(self):
         identities, damage = fixture()
         delayed = self.session()
@@ -539,7 +555,7 @@ class LiveQuestRegressionTests(PinnedLiveTest):
             first = backend._poll()
             second = backend._poll()
             self.assertEqual(first['measurement']['report'], second['measurement']['report'])
-            self.assertEqual(len(list(Path(work).glob('quest-*.json'))), 3)
+            self.assertEqual(len(list(Path(work).glob('quest-*.json'))), 2)  # The outside interval has no player damage.
             for entry in second['quest_history']:
                 self.assertEqual(saved_snapshot(entry['report_path'])['measurement']['report'], entry['report'])
             backend._execute('AutoOff', None, None)
@@ -558,7 +574,7 @@ class LiveQuestRegressionTests(PinnedLiveTest):
             backend.log_directory = Path(work) / 'recovered'
             recovered = backend._poll()
             self.assertIsNone(recovered['auto_save_error'])
-            self.assertEqual(len(list(backend.log_directory.glob('*.json'))), 3)
+            self.assertEqual(len(list(backend.log_directory.glob('*.json'))), 2)
 
     def test_modified_archive_is_preserved_and_history_can_use_in_memory_report(self):
         with tempfile.TemporaryDirectory() as work:

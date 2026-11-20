@@ -210,7 +210,7 @@ class AppearanceWindowTests(unittest.TestCase):
 
     def test_footer_band_follows_accent_and_header_borders_resize_columns(self):
         import tkinter as tk
-        from .app import Application, COLUMN_MIN_WIDTH
+        from .app import Application, PANEL, TEXT
 
         class Stub:
             interval = .5
@@ -239,27 +239,59 @@ class AppearanceWindowTests(unittest.TestCase):
                 app.reset_appearance()
                 self.assertEqual(app.indicator.cget('background'), '#69c9b0')
 
+                def menus(widget):
+                    found = [widget] if isinstance(widget, tk.Menu) else []
+                    for child in widget.winfo_children():
+                        found += menus(child)
+                    return found
+                # Check marks are drawn in the text color, not only on hover.
+                for background in (DEFAULT_BACKGROUND, '#e8e0d0'):
+                    self.assertTrue(app._commit_appearance(background, '#aa3366', ''))
+                    marks = {str(m.cget('selectcolor')) for m in menus(root)}
+                    self.assertEqual(marks, {app.colors[TEXT]})
+                    self.assertNotEqual(app.colors[TEXT], app.colors[PANEL])
+                app.reset_appearance()
+
                 before = app._layout()
-                (name, _, start, border), (right, _, _, right_end) = before[0], before[1]
+                (name, name_title, start, border), (right, right_title, _, right_end) = before[0], before[1]
+                name_min, right_min = app._column_min_width(name_title), app._column_min_width(right_title)
+                self.assertGreater(right_min, app.fonts[app.settings.font_size][0].measure(right_title))
                 sort = (app.sort_key, app.descending)
                 app._header_press(Event(round(border)))
                 self.assertEqual((app.sort_key, app.descending), sort)  # A border press does not sort.
                 app._header_drag(Event(right_end + 100))
-                self.assertAlmostEqual(app._layout()[0][3], right_end - COLUMN_MIN_WIDTH, delta=1)
-                app._header_drag(Event(round(border) + 10))
-                app._header_release(Event(round(border) + 10))
+                # The neighbour never shrinks below its own header title.
+                self.assertAlmostEqual(app._layout()[0][3], right_end - right_min, delta=1)
+                app._header_drag(Event(round(border) - 10))
+                app._header_release(Event(round(border) - 10))
                 after = app._layout()
-                self.assertAlmostEqual(after[0][3], round(border) + 10, delta=1)
+                self.assertAlmostEqual(after[0][3], round(border) - 10, delta=1)
                 self.assertAlmostEqual(after[1][3], right_end, delta=1)  # Other columns keep their place.
                 for moved, original in zip(after[2:], before[2:]):
                     self.assertAlmostEqual(moved[2], original[2], places=6)
                     self.assertAlmostEqual(moved[3], original[3], places=6)
                 app._header_press(Event(round(after[0][3])))
                 app._header_drag(Event(-500))
-                self.assertAlmostEqual(app._layout()[0][3], COLUMN_MIN_WIDTH, delta=1)
+                self.assertAlmostEqual(app._layout()[0][3], name_min, delta=1)
                 app._header_release(Event(0))
                 app._header_press(Event(round((after[1][2] + after[1][3]) / 2)))
                 self.assertEqual(app.sort_key, right)  # Inside a column, a click still sorts.
+                # Plain columns show no tooltip; the header menu toggles the same columns.
+                app._header_tip(Event(round((after[1][2] + after[1][3]) / 2)))
+                self.assertIsNone(app.tooltip.window)
+                popups = []
+                with patch('tkinter.Menu.tk_popup', lambda menu, x, y: popups.append(menu)):
+                    app._header_menu(Event(10))
+                menu = popups[0]
+                self.assertEqual(str(menu.cget('selectcolor')), app.colors[TEXT])
+                labels =[menu.entrycget(i, 'label') for i in range(menu.index('end') + 1) if menu.type(i) != 'separator']
+                self.assertIn('列幅を元に戻す', labels)
+                hits = next(i for i in range(menu.index('end') + 1) if menu.type(i) == 'checkbutton' and menu.entrycget(i, 'label') == 'Hits')
+                had_hits = 'hits_dealt' in app.settings.columns
+                menu.invoke(hits)
+                self.assertEqual('hits_dealt' in app.settings.columns, not had_hits)
+                menu.invoke(hits)
+                self.assertEqual('hits_dealt' in app.settings.columns, had_hits)
                 widths = dict(app.settings.column_widths)
                 self.assertEqual(set(widths), {name, right})
                 self.assertFalse(backend.requests)

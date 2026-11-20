@@ -61,9 +61,12 @@ def render_text(report, *, dps_mode='quest', anonymize=False, time_decimals=True
             f" | {number(row['dps'], 1)} DPS | JA: {percentage(row['ja'])} | Critical: {percentage(row['crit'])}"
             f" | Max: {row['max_hit']:,} ({clean_line(row['attack'])})")
     for row in rows:
-        lines.extend(['', '', f"[ {clean_line(row['name'])} - {row['share']:.2f}% - {row['damage_dealt']:,} dmg ]", ''])
+        # Like the detail window, the per-attack list keeps HP-unlinked hits.
+        whole = row['total_damage_dealt']
+        unlinked = f" （HP非連動 {row['hp_unlinked_damage']:,} dmg を含む）" if row['hp_unlinked_damage'] else ''
+        lines.extend(['', '', f"[ {clean_line(row['name'])} - {row['share']:.2f}% - {whole:,} dmg{unlinked} ]", ''])
         for attack in attack_rows(report, row):
-            share = attack['damage_dealt'] * 100 / row['damage_dealt'] if row['damage_dealt'] else 0
+            share = attack['damage_dealt'] * 100 / whole if whole else 0
             average = attack['damage_dealt'] / attack['hits_dealt'] if attack['hits_dealt'] else None
             label = attack['attack_name'] or f"不明 (0x{attack['attack_id']:08X})"
             lines.extend([f"{share:05.2f}%\t| {clean_line(label)} - {attack['damage_dealt']:,} dmg"

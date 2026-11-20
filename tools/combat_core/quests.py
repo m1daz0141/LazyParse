@@ -10,7 +10,7 @@ from .metadata import MetadataTimeline
 from .model import ObjectRef
 from .quest_probe import inspect_notice
 from .identity_fields import spawn_name
-from .damage_policy import included_totals
+from .damage_policy import dps_damage, dps_total
 
 SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b861243332'
 # Old recordings keep their original source hash. New-client packet layout was
@@ -59,6 +59,11 @@ DIVIDE_KILL_WINDOW_SECONDS = 60
 def _shape_matches(shapes, pattern):
     return len(shapes) <= len(pattern) and all(
         shape[0] == expected[0] and expected[1] in (None, shape[1]) for shape, expected in zip(shapes, pattern))
+
+
+def player_hits(report):
+    """Included hits dealt by players (pets count for their owner)."""
+    return sum(actor['hits_dealt'] for actor in report.get('actors', []) if actor['kind'] == 'player')
 
 
 class ClearNotice:
@@ -211,10 +216,10 @@ class QuestBucket:
             span['end_qpc'] = max(span['first_damage_qpc'], through)
             span['end_evidence'] = kill_evidence or (self.reason if self.end is not None else 'latest_observed_qpc')
         elapsed = sum((s['end_qpc'] - s['first_damage_qpc']) / s['qpc_frequency'] for s in timing['spans'])
-        timing.update(elapsed_seconds=elapsed, dps=included_totals(result)['positive_sum'] / elapsed if elapsed else None,
+        timing.update(elapsed_seconds=elapsed, dps=dps_total(result) / elapsed if elapsed else None,
                       quest_end_detection=self.reason or 'quest_measurement_in_progress')
         for group in [*result['actors'], *result['attacks'], *result['roles'].values()]:
-            group['dps'] = group['damage_dealt'] / elapsed if elapsed else None
+            group['dps'] = dps_damage(group) / elapsed if elapsed else None
         # Only intervals overlapping an observation gap (lost binding until
         # the next world notice) are suspended; later quests are not.
         gaps = [gap for gap in self.owner.gaps if (self.end is None or self.end >= gap[0])
@@ -458,7 +463,10 @@ class QuestSession:
         quests = [r for r in reports if r['quest_measurement']['kind'] == 'quest']
         return {'supported': self.supported, 'suspended': self.suspended, 'experimental': True,
                 'current': quests[-1] if quests else None,
+                # An outside interval is kept only when players dealt damage in it;
+                # heals, damage taken and excluded values alone are discarded.
                 'history': [r for r in reports if r['quest_measurement']['end_qpc'] is not None
-                            and (r['quest_measurement']['kind'] == 'quest' or r['counts']['records'])],
+                            and (r['quest_measurement']['kind'] == 'quest' or player_hits(r))],
                 'outside_records': sum(r['counts']['records'] for r in reports if r['quest_measurement']['kind'] != 'quest'),
+                'outside_player_hits': sum(player_hits(r) for r in reports if r['quest_measurement']['kind'] != 'quest'),
                 'all_records': sum(r['counts']['records'] for r in reports)}

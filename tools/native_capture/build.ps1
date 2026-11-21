@@ -62,11 +62,6 @@ try {
     Invoke-NativeBuild ($common + @('thread_guard.c','thread_guard_test.c','-o',(Join-Path $binDir 'ThreadGuardTest.exe')))
     Invoke-NativeBuild ($common + @('-DOVERPARSE_RUNTIME_TEST','-DAUTO_SESSION_DIR=L"unused"',
         'runtime_test_host.c','capture_autostart.c','-municode','-lbcrypt','-o',(Join-Path $binDir 'AutoRuntimeTestHost.exe')))
-    Invoke-NativeBuild ($common + @('loader.c','-municode','-lbcrypt','-ladvapi32','-o',(Join-Path $binDir 'CaptureLoader.exe')))
-    Invoke-NativeBuild ($common + @('loader.c','-municode','-DOVERPARSE_LOADER_TEST','-lbcrypt','-ladvapi32','-o',(Join-Path $binDir 'CaptureLoaderTest.exe')))
-    Invoke-NativeBuild ($common + @('diagnose_access.c','-municode','-ladvapi32','-lpsapi','-o',(Join-Path $binDir 'DiagnoseAccess.exe')))
-    Invoke-NativeBuild ($common + @('remote_test_host.c','-o',(Join-Path $binDir 'CaptureRemoteTestHost.exe')))
-    Invoke-NativeBuild ($common + @('-shared','loader_fixture.c','-o',(Join-Path $binDir 'CaptureLoaderFixture.dll')))
     Copy-Item -LiteralPath (Join-Path $minhookDir 'LICENSE.txt') -Destination (Join-Path $binDir 'MinHook-LICENSE.txt')
     Get-FileHash -Algorithm SHA256 (Join-Path $binDir '*.dll'),(Join-Path $binDir '*.exe') | Select-Object Path,Hash
 } finally { Pop-Location }

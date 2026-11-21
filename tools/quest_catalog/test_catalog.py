@@ -4,7 +4,7 @@ import struct
 import unittest
 
 from .local_text import read_text
-from .packets import HEADER, RECORD, CatalogRecord, join_names, parse_quests, read_catalog
+from .packets import HEADER, RECORD, join_names, parse_quests, read_catalog
 
 
 def packet(minor=24, entries=((475, 20010),)):

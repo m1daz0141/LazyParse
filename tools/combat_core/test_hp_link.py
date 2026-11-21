@@ -1,7 +1,7 @@
 import struct
 import unittest
 
-from tools.combat_core.test_combat_core import ENEMY, OTHER, SELF, engine, packet, registry
+from tools.combat_core.test_combat_core import OTHER, SELF, engine, packet, registry
 from tools.gui.timing import with_dps_mode
 from tools.gui.viewmodel import actor_rows, attack_rows
 from tools.combat_core.damage_policy import BURN_ATTACK_IDS

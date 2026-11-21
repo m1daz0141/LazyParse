@@ -1,5 +1,4 @@
 """PyInstaller entry point. Writable files live beside LazyParse.exe."""
-import sys
 import traceback
 
 from tools.gui.__main__ import main

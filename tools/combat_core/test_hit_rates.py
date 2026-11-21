@@ -5,7 +5,7 @@ import hashlib
 import unittest
 
 from .engine import CombatEngine
-from .hit_flags import read_legacy_ignore
+from .hit_flags import read_ja_exclusions
 from .hit_rates import HitRates
 from .__main__ import replay, follow
 from .test_combat_core import packet, events, registry, SELF, PET, ENEMY
@@ -24,7 +24,7 @@ class RateTests(unittest.TestCase):
     def test_scope_before_owner_credit_and_incoming_healing_not_in_denominator(self):
         identities = registry()
         identities.register(PET, 'pet', 'fixture', owner=SELF)
-        ignored, _ = read_legacy_ignore()
+        ignored, _ = read_ja_exclusions()
         ignored_id = next(iter(ignored))
         wire = [flagged(0x41), flagged(0, value=900), flagged(0x41, source=PET),
                 flagged(0x41, attack=4065469038), flagged(0x41, attack=ignored_id),

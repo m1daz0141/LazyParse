@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from .audit_hit_flags import audit_capture, summarize
-from .hit_flags import JA_MASK, CRIT_MASK, inspect_event, legacy_flags, read_legacy_ignore, read_ja_exclusions, RULES_PATH
+from .hit_flags import JA_MASK, CRIT_MASK, inspect_event, legacy_flags, read_ja_exclusions, RULES_PATH
 
 ROOT = Path(__file__).resolve().parents[2]
 MARON = ROOT / 'tools/native_capture/captures/classic-auto-fixture-001/run-100000000000000001-1-0/segment-000001/capture.opcap'
@@ -98,7 +98,7 @@ class CandidateTests(unittest.TestCase):
 @unittest.skipUnless(MARON.exists() and FIRST.exists(), 'private Classic recordings required')
 class RecordingTests(unittest.TestCase):
     def test_maron_ja_exclusion_and_crit_candidates_preserve_owner_totals(self):
-        ignored, _ = read_legacy_ignore()
+        ignored, _ = read_ja_exclusions()
         report, rows = audit_capture(MARON, ignored)
         pet = [row for row in rows if row['source_kind'] == 'pet' and row['signed_value'] > 0]
         self.assertEqual(len(pet), 10)
@@ -112,7 +112,7 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(report['capture_sha256'], '79f87f5cd632c61d6d311df08372bdb29025ae77ebc1a8508ea0fa34d1724ff6')
 
     def test_prior_screenshot_values_have_both_crit_candidate_states(self):
-        ignored, _ = read_legacy_ignore()
+        ignored, _ = read_ja_exclusions()
         _, rows = audit_capture(FIRST, ignored)
         positives = {row['signed_value']: row for row in rows if row['signed_value'] > 0}
         for value, expected in [(30529, True), (30535, True), (30547, True), (56652, False)]:
@@ -143,7 +143,7 @@ class RecordingTests(unittest.TestCase):
 @unittest.skipUnless((HERO / 'segment-000003/capture.opcap').exists(), 'private controlled Hero recording required')
 class ControlledHeroTests(unittest.TestCase):
     def test_same_later_combo_ids_clear_and_set_ja_with_unchanged_damage(self):
-        ignored, _ = read_legacy_ignore()
+        ignored, _ = read_ja_exclusions()
         expected = [(2, False, 859372, '2338b31f03c3d8c0804bf9db8e239cd410f45036afd42d4e801f55fa546fc695'),
                     (3, True, 1102251, 'ae1040da2e688ef3614004126c6eeb2e67075eeaf201698a7ddf7dde155997a1')]
         for number, ja, total, digest in expected:

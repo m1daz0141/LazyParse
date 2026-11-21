@@ -14,7 +14,7 @@ from tools.combat_core.__main__ import replay
 from tools.combat_core.live import RuntimeMonitor
 from tools.combat_core.process_state import utc_filetime, probe_process
 from tools.combat_core import test_combat_core as fixtures
-from tools.combat_core.test_combat_core import (SELF, OTHER, ENEMY, PET,
+from tools.combat_core.test_combat_core import (SELF, ENEMY, PET,
     capture_bytes, identity_packet, metadata_bytes, packet)
 
 

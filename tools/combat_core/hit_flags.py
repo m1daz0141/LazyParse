@@ -48,10 +48,6 @@ def read_ja_exclusions(path=None):
         return None, {'path': str(path), 'available': False, 'error': str(error)}
 
 
-# Compatibility for older callers; this never opens an OverParse resource.
-read_legacy_ignore = read_ja_exclusions
-
-
 def legacy_flags(packet):
     """Keep the raw bits even where JA does not apply, such as a pet source."""
     fields = decode(packet, 'current')

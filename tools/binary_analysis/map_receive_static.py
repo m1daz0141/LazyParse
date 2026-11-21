@@ -61,14 +61,6 @@ class StaticImage:
     def rva(self, offset):
         return self.pe.get_rva_from_offset(offset)
 
-    def section_at(self, rva):
-        for section in self.pe.sections:
-            if section.VirtualAddress <= rva < section.VirtualAddress + max(
-                section.Misc_VirtualSize, section.SizeOfRawData
-            ):
-                return section.Name.rstrip(b"\0").decode("ascii", "replace")
-        return None
-
     def read_rva(self, rva, size):
         for section in self.pe.sections:
             name = section.Name.rstrip(b"\0").decode("ascii", "replace")

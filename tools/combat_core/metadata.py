@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import struct
 
-from .model import IdentityRegistry, ObjectRef
+from .model import ObjectRef
 from .reader import HEADER
 from .identity_fields import spawn_name, spawn_owner
 

@@ -118,7 +118,7 @@ class PortableTests(unittest.TestCase):
             self.assertEqual(backend.events.get_nowait()['type'], 'loader_installed')
             self.assertFalse(updated.needs_reselection())
             self.assertFalse(Deployment(d.home, d.resources, app_identity='exe:new').needs_reselection())
-            record = json.loads(updated.record.read_text())
+            record = json.loads(updated.record.read_text(encoding='utf-8-sig'))
             record.pop('application_id')
             updated.record.write_text(json.dumps(record))
             self.assertTrue(updated.needs_reselection())  # Migrate pre-version ledgers once.
@@ -145,7 +145,7 @@ class PortableTests(unittest.TestCase):
                 d.check(folder)
             self.assertEqual(d.install(folder), str(folder.resolve()))
             d.check(folder)
-            record = json.loads(d.record.read_text())
+            record = json.loads(d.record.read_text(encoding='utf-8-sig'))
             self.assertEqual(record['sha256'], digest((folder / 'eos_gaming.dll').read_bytes()))
             Deployment(d.home, d.resources).prepare()  # Startup does not mutate game files.
             d.install(folder)
@@ -372,7 +372,7 @@ class PortableTests(unittest.TestCase):
                     capture_output=True, text=True, timeout=15, creationflags=0x08000000)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(len(list(captures.glob('run-*'))), 2)
-            state = json.loads((captures/'autostart-state.json').read_text())
+            state = json.loads((captures/'autostart-state.json').read_text(encoding='utf-8-sig'))
             for field in ('guard_owner_thread_id', 'guard_failed_thread_id', 'guard_failed_thread_exit_code',
                           'guard_failed_thread_query_error', 'guard_operation_error', 'guard_resume_error'):
                 self.assertEqual(state[field], 0)
@@ -388,7 +388,7 @@ class PortableTests(unittest.TestCase):
                 while time.monotonic() < deadline:
                     self.assertIsNone(process.poll())
                     try:
-                        state = json.loads((root/'autostart-state.json').read_text())
+                        state = json.loads((root/'autostart-state.json').read_text(encoding='utf-8-sig'))
                         if predicate(state):
                             return state
                     except (OSError, ValueError):
@@ -432,12 +432,12 @@ class PortableTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for part, damage in [('part-1', [1001]), ('part-2', [2002]), ('part-3', [3001, 3002])]:
                 self.assertEqual([r['damage'] for r in records(output/part/'capture.opcap')], damage)
-                status = json.loads((output/part/'capture-status.json').read_text())
+                status = json.loads((output/part/'capture-status.json').read_text(encoding='utf-8-sig'))
                 self.assertEqual(status['io_error'], 0)
                 self.assertEqual(status['dropped'], 0)
                 self.assertEqual(status['virtual_protect_calls'], 0)
                 self.assertTrue(status['stopped'])
-            context = json.loads((output/'identity-context/context-status.json').read_text())
+            context = json.loads((output/'identity-context/context-status.json').read_text(encoding='utf-8-sig'))
             self.assertEqual(context['connection_gaps'], 3)
             self.assertEqual(context['binding_generation'], 4)
             self.assertTrue(context['stopped'])
@@ -457,7 +457,7 @@ class PortableTests(unittest.TestCase):
             self.assertEqual([r['damage'] for r in first], list(range(1, 11)))
             self.assertEqual([r['damage'] for r in second if r['damage'] < 900000], list(range(11, 51)))
             for part, rows in [('part-1', first), ('part-2', second)]:
-                status = json.loads((output/part/'capture-status.json').read_text())
+                status = json.loads((output/part/'capture-status.json').read_text(encoding='utf-8-sig'))
                 self.assertEqual(status['written'], len(rows))
                 self.assertEqual(status['dropped'], 0)
                 self.assertEqual(status['io_error'], 0)
@@ -465,7 +465,7 @@ class PortableTests(unittest.TestCase):
                 self.assertTrue(status['stopped'])
                 build = json.loads((RESOURCES/'build.json').read_text(encoding='utf-8-sig'))
                 profile_path = Path(__file__).resolve().parents[1]/'native_capture/profiles/classic-2026-11-18.json'
-                profile = json.loads(profile_path.read_text())
+                profile = json.loads(profile_path.read_text(encoding='utf-8-sig'))
                 self.assertEqual(build['classic_sha256'], profile['classic_sha256'])
                 self.assertEqual(int(status['callback_rva'], 0), int(profile['layout']['callback_rva'], 0))
 

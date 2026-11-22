@@ -182,7 +182,7 @@ class QuestBucket:
         self.engine.begin_segment(owner.capture_id, first_sequence=None)
         self.timeline = MetadataTimeline()
         self.timeline.events = owner.identities
-        self.timeline.through(start, owner.frequency, self.engine)
+        self.timeline.seed(start, owner.frequency, self.engine)
 
     @property
     def key(self):

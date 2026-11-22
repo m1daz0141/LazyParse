@@ -78,6 +78,7 @@ class MetadataTimeline:
     def __init__(self):
         self.events = []
         self.position = 0
+        self.start_qpc = None
         self.packet_counts = Counter()
         self.decisions = []
         self.pending_owners = {}
@@ -103,6 +104,11 @@ class MetadataTimeline:
 
     def before(self, damage, engine):
         self.through(damage.qpc, damage.frequency, engine)
+
+    def seed(self, start_qpc, frequency, engine):
+        """Apply the context up to the measured start; earlier binding resets are not gaps."""
+        self.start_qpc = start_qpc
+        self.through(start_qpc, frequency, engine)
 
     def through(self, qpc, frequency, engine):
         while self.position < len(self.events) and self.events[self.position].qpc <= qpc:
@@ -132,7 +138,8 @@ class MetadataTimeline:
         decision = {**event.as_dict(), "interpretation_live_verified": False, "action": "retained_only"}
         try:
             if (major, minor) == (0xff, 1):
-                engine.mark_gap("identity_context_binding_reset")
+                if self.start_qpc is None or event.qpc >= self.start_qpc:
+                    engine.mark_gap("identity_context_binding_reset")
                 engine.registry.clear_scene()
                 if (engine.registry.self_evidence or "").startswith("packet_"):
                     engine.registry.self_ref = engine.registry.self_evidence = None

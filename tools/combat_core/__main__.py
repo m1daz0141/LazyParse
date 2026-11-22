@@ -33,7 +33,7 @@ def replay(capture, registry=None, idle_seconds=10, chunk_size=65536, on_event=N
         timeline.update(meta_events)
         if context_through < context_ref["start_qpc"]:
             raise ValueError("identity context has not published the segment start yet; use --follow")
-        timeline.through(context_ref["start_qpc"], context_ref["qpc_frequency"], engine)
+        timeline.seed(context_ref["start_qpc"], context_ref["qpc_frequency"], engine)
     elif timeline:
         timeline.update(read_metadata(meta_path))
         if status and status.get("stopped") and len(timeline.events) != status.get("identity_written"):
@@ -174,7 +174,7 @@ def follow(capture, registry, idle_seconds, on_event):
                     if context_status.get("io_error"):
                         raise ValueError("identity context writer failed")
                     if not context_seeded and context_through >= context_ref["start_qpc"]:
-                        timeline.through(context_ref["start_qpc"], context_ref["qpc_frequency"], engine)
+                        timeline.seed(context_ref["start_qpc"], context_ref["qpc_frequency"], engine)
                         context_seeded = True
                 elif timeline:
                     finalized = bool(status and status.get("stopped"))

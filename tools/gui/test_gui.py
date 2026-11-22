@@ -228,7 +228,7 @@ class WindowTests(unittest.TestCase):
                 self.assertIn('"ja_excluded_hits": 13', detail.info.get('1.0', 'end'))
                 self.assertIn('23.08%', detail.label.cget('text'))
                 self.assertEqual(len(detail.sources.get_children()), 2)
-                self.assertEqual(first[3], '対象')
+                self.assertEqual(first[4], '—')  # No HP-unlinked damage.
                 hits = lambda: [int(detail.attacks.item(item, 'values')[6]) for item in detail.attacks.get_children()]
                 detail.sort_by(detail.attacks, 'hits')
                 self.assertEqual(hits(), sorted(hits(), reverse=True))

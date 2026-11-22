@@ -6,7 +6,8 @@ import shutil
 import tempfile
 import unittest
 
-from .metadata import IdentityEvent
+from .engine import CombatEngine
+from .metadata import IdentityEvent, MetadataTimeline
 from .quests import QuestSession, SUPPORTED_CLASSIC, SUPPORTED_CLASSICS
 from .quest_replay import replay_quests
 from .live import RuntimeMonitor
@@ -58,6 +59,17 @@ def fixture():
                      (3, 300, packet(value=-10)), (4, 1100, packet(value=1, attack=0)),
                      (5, 2600, packet(value=80)), (6, 3400, packet(ENEMY, SELF, 5))])
     return identities, damage
+
+
+class BindingResetTests(unittest.TestCase):
+    def test_reset_before_the_measured_start_is_not_a_gap(self):
+        timeline, engine = MetadataTimeline(), CombatEngine()
+        engine.begin_segment('capture')
+        timeline.events = [notice(1, 1000, 0xff, 1), notice(2, 1500, 0xff, 1), notice(3, 3000, 0xff, 1)]
+        timeline.seed(2000, 1000, engine)
+        self.assertNotIn('identity_context_binding_reset', engine.quality_flags)
+        timeline.through(3000, 1000, engine)
+        self.assertIn('identity_context_binding_reset', engine.quality_flags)
 
 
 class QuestTests(unittest.TestCase):

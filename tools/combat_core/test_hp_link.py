@@ -84,11 +84,29 @@ class HpLinkTests(unittest.TestCase):
         detail = {a['attack_id']: a for a in attack_rows(report, row)}
         self.assertEqual((14000, 9000, 0), (detail[8]['damage_dealt'], detail[8]['max_hit'], detail[8]['rated_max_hit']))
 
-    def test_detail_counted_label(self):
-        from tools.gui.app import counted_label
-        self.assertEqual(['対象', '一部対象外', '対象外'], [counted_label({'damage_dealt': 100, 'hp_unlinked_damage': u})
-                                                    for u in (0, 40, 100)])
-        self.assertEqual('対象', counted_label({'damage_dealt': 100}))
+    def test_detail_window_shows_excluded_damage_beside_damage(self):
+        import tkinter as tk
+        from tools.gui.app import DetailWindow
+        report = with_dps_mode(run([hit(1000, 1, value=300, attack=7), hit(1000, 4, value=5000, attack=8),
+                                    hit(1000, 4, value=9000, attack=8), hit(700, 1, value=200, attack=7)]), 'quest')
+        row = next(r for r in actor_rows(report) if r['role'] == 'self')
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(str(error))
+        root.withdraw()
+        try:
+            detail = DetailWindow(root, report, row)
+            tree = detail.attacks
+            self.assertEqual('Damage(対象外)', tree.heading('excluded', 'text'))
+            values = {tree.item(item, 'values')[1]: tree.item(item, 'values') for item in tree.get_children()}
+            self.assertEqual(('14,000', '14,000'), values['0x00000008'][3:5])
+            self.assertEqual(('500', '—'), values['0x00000007'][3:5])
+            detail.sort_by(tree, 'excluded')
+            self.assertEqual('0x00000008', tree.item(tree.get_children()[0], 'values')[1])
+            detail.window.destroy()
+        finally:
+            root.destroy()
 
     def test_rated_max_falls_back_when_its_hit_is_reclassified(self):
         report = run([hit(1000, 1, value=50), hit(1000, 4, value=900), hit(1000, 4, value=10), hit(900, 1, value=40)])

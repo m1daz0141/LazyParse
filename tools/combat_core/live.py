@@ -163,7 +163,7 @@ class SegmentFollower:
         if not self.seeded:
             if through < ref['start_qpc']:
                 raise PendingData('identity context has not reached the segment start')
-            self.timeline.through(ref['start_qpc'], ref['qpc_frequency'], self.engine)
+            self.timeline.seed(ref['start_qpc'], ref['qpc_frequency'], self.engine)
             self.quests = QuestSession(str(self.path.resolve()), ref['start_qpc'], ref['qpc_frequency'],
                                        ref['source_sha256'], self.engine.idle_seconds)
             self.seeded = True

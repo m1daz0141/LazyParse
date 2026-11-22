@@ -63,21 +63,12 @@ class Tooltip:
         self.timer = self.root.after(600, open_tip)
 
 
-COUNTED_ORDER = {'対象': 0, '一部対象外': 1, '対象外': 2}
-
-
-def counted_label(attack):
-    """Whether an attack's damage counts in the list and DPS (HP-unlinked hits do not)."""
-    unlinked = attack.get('hp_unlinked_damage', 0)
-    return '対象' if not unlinked else '対象外' if unlinked >= attack['damage_dealt'] else '一部対象外'
-
-
 class DetailWindow:
     def __init__(self, parent, report, actor):
         self.window = tk.Toplevel(parent)
         self.window.withdraw()
         self.window.title(actor['name'] + ' — LazyParse')
-        self.window.geometry('1120x355')
+        self.window.geometry('1150x355')
         self.window.configure(bg=BG)
         self.label = tk.Label(self.window, bg=BG, fg=TEXT, anchor='w', padx=10, pady=9, font=('Meiryo UI', 10))
         self.label.pack(fill='x')
@@ -87,7 +78,7 @@ class DetailWindow:
         self.sort_values = {}  # tree -> {item: {column: raw value}}
         self.titles = {}       # tree -> {column: heading text}
         self.attacks = self._table(notebook, '攻撃別', [('name', 'Attack', 205), ('id', 'Attack ID', 112),
-            ('kind', '種別', 70), ('counted', '対象', 80), ('damage', 'Damage', 95), ('share', '%', 58), ('hits', 'Hits', 55),
+            ('kind', '種別', 70), ('damage', 'Damage', 95), ('excluded', 'Damage(対象外)', 110), ('share', '%', 58), ('hits', 'Hits', 55),
             ('max', 'Max Hit', 84), ('dps', 'DPS', 82), ('ja', 'JA %', 60), ('crit', 'Crit %', 60)])
         self.sources = self._table(notebook, '発生元', [('name', 'Name / ID', 220), ('damage', 'Damage', 110),
                                                       ('key', 'Source', 220)])
@@ -108,7 +99,7 @@ class DetailWindow:
         self.sort_values[tree] = {}
         for key, name, width in columns:
             tree.heading(key, text=name, command=lambda key=key, tree=tree: self.sort_by(tree, key))
-            tree.column(key, width=width, minwidth=45, anchor='w' if key in {'name', 'id', 'key', 'kind', 'counted'} else 'e')
+            tree.column(key, width=width, minwidth=45, anchor='w' if key in {'name', 'id', 'key', 'kind'} else 'e')
         scroll = ttk.Scrollbar(frame, orient='vertical', command=tree.yview, style='LazyParse.Vertical.TScrollbar')
         tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side='right', fill='y')
@@ -119,7 +110,7 @@ class DetailWindow:
     def sort_by(self, tree, column):
         """Heading click: sort by this column; a second click reverses it."""
         previous, descending = self.sort_state.get(tree, (None, False))
-        text_column = column in {'name', 'id', 'key', 'kind', 'counted'}
+        text_column = column in {'name', 'id', 'key', 'kind'}
         descending = not descending if previous == column else not text_column
         self.sort_state[tree] = (column, descending)
         self._apply_sort(tree)
@@ -147,22 +138,23 @@ class DetailWindow:
         whole = actor.get('total_damage_dealt', actor['damage_dealt'])
         self.label.configure(text=f"{actor['name']}    Damage {whole:,}    DPS {number(actor['dps'], 1)}    Hits {actor['hits_dealt']}"
                                  f"    JA {percentage(actor['ja'])}    Crit {percentage(actor['crit'])}"
-                                 + (f"    HP非連動 {unlinked:,}（一覧・DPS対象外）" if unlinked else ''))
+                                 + (f"    HP非連動（DPS対象外） {unlinked:,}" if unlinked else ''))
         for tree in (self.attacks, self.sources):
             tree.delete(*tree.get_children())
             self.sort_values[tree].clear()
         elapsed = display_elapsed(report)
         for attack in attack_rows(report, actor):
             name = attack_label(attack['attack_id'])
-            counted = counted_label(attack)
+            # HP-unlinked hits stay listed but are left out of the list and DPS.
+            excluded = attack.get('hp_unlinked_damage', 0)
             share = attack['damage_dealt'] * 100 / whole if whole else None
             dps = dps_damage(attack) / elapsed if elapsed else None
             raw = {'name': name, 'id': attack['attack_id'], 'kind': attack['attack_kind'] or '',
-                   'counted': COUNTED_ORDER[counted], 'damage': attack['damage_dealt'], 'share': share,
+                   'damage': attack['damage_dealt'], 'excluded': excluded, 'share': share,
                    'hits': attack['hits_dealt'], 'max': attack['max_hit'], 'dps': dps,
                    'ja': attack['ja'], 'crit': attack['crit']}
-            self._insert(self.attacks, raw, (name, f"0x{attack['attack_id']:08X}", attack['attack_kind'] or '—', counted,
-                number(attack['damage_dealt']), f'{share:.1f}' if share is not None else '—',
+            self._insert(self.attacks, raw, (name, f"0x{attack['attack_id']:08X}", attack['attack_kind'] or '—',
+                number(attack['damage_dealt']), number(excluded) if excluded else '—', f'{share:.1f}' if share is not None else '—',
                 attack['hits_dealt'], number(attack['max_hit']), number(dps, 1),
                 number(attack['ja'], 1), number(attack['crit'], 1)))
         for source in source_rows(report, actor):

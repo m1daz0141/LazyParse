@@ -28,6 +28,10 @@ resources = [
     ('COPYRIGHT', 'licenses/LazyParse'),
     ('THIRD_PARTY_NOTICES', 'licenses'),
 ]
+# The quest list capture is investigation-only; the normal app must never ship it.
+if ('quest-catalog.opcat'.encode('utf-16le') in (root / 'tools/portable/bin/Capture.dll').read_bytes() or
+        b'quest_catalog' in (root / 'tools/portable/bin/build.json').read_bytes()):
+    raise SystemExit('tools/portable/bin contains the quest list capture build')
 if (root / 'tools/combat_core/ja_exclusions.local.csv').is_file():
     resources.append(('tools/combat_core/ja_exclusions.local.csv', 'tools/combat_core'))
 resources.append((str(Path(sys.base_prefix) / 'LICENSE.txt'), 'licenses/Python'))

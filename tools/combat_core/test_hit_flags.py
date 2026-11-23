@@ -77,8 +77,9 @@ class CandidateTests(unittest.TestCase):
 
     def test_ignore_policy_provenance_and_unavailable_are_explicit(self):
         ignored, policy = read_ja_exclusions(RULES_PATH)
-        self.assertEqual(ignored, frozenset({4065469038}))
-        self.assertEqual(policy['rows'], 1)
+        self.assertEqual(len(ignored), 130)
+        self.assertIn(4065469038, ignored)
+        self.assertEqual(policy['rows'], 130)
         self.assertTrue(policy['available'])
         self.assertFalse(policy['requires_overparse_files'])
         with tempfile.TemporaryDirectory() as work:

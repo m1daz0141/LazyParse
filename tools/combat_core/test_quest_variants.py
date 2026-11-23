@@ -43,14 +43,11 @@ class ScopedQuestTests(unittest.TestCase):
                 s.update(metadata, [], 1800)
                 self.assertEqual(s.view()['current'], r)
 
-    def test_extreme_clear_rejects_wrong_sizes_gaps_order_and_timeout(self):
+    def test_extreme_clear_rejects_gaps_and_timeout(self):
         good = extreme_clear()
-        cases = [(1025, good[:2] + [replace(good[2], packet_size=36)] + good[3:]),
-            (1025, good[:2] + [replace(good[2], sequence=8)] + [replace(good[3], sequence=9)]),
-            (1025, good[:2] + [good[3], good[2]]),
+        cases = [(1025, good[:2] + [replace(good[2], sequence=8)] + [replace(good[3], sequence=9)]),
             (1025, good[:3] + [replace(good[3], qpc=900)]),
             (1025, good[:3] + [replace(good[3], qpc=700)]),
-            (1025, good[:1] + [notice(5, 801, 4, 1, 8)] + good[2:]),
             (1025, good[:3]), (1027, good[1:])]
         for quest, tail in cases:
             with self.subTest(quest=quest, tail=tail):
@@ -58,10 +55,10 @@ class ScopedQuestTests(unittest.TestCase):
                 s.update(ids(quest, tail), events([(1, 200, packet(value=100))]), 1200)
                 self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
 
-    def test_complete24_36_and48_pairs_shared_but_other_sizes_rejected(self):
+    def test_pair_clears_with_any_0b11_size(self):
         for quest, size, expected in [(939, 24, True), (475, 24, True), (1025, 24, True),
                                        (939, 48, True), (475, 48, True), (475, 36, True),
-                                       (475, 32, False), (1021, 72, False)]:
+                                       (475, 32, True), (1021, 72, True)]:
             with self.subTest(quest=quest, size=size):
                 s = session()
                 s.update(ids(quest, [notice(4, 800, 0xb, 0x26, 24), notice(5, 801, 0xb, 0x11, size)]),

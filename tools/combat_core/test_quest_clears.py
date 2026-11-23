@@ -82,13 +82,11 @@ class QuestSuccessTests(unittest.TestCase):
             direct.update(returned, damage + events([(2, 1001, packet(value=3, attack=0))]), 2000)
             self.assertEqual(direct.view(), s.view())
 
-    def test_masquerade_short_success_rejects_partial_reordered_delayed_and_unknown_size(self):
+    def test_masquerade_short_success_rejects_partial_delayed_and_gapped(self):
         good = success(1130)
         good[2] = replace(good[2], packet_size=20)
-        cases = [good[:-1], good[:2] + good[3:], good[:1] + [good[2], good[1]] + good[3:],
-            good[:-1] + [replace(good[-1], qpc=851)],
-            good[:-1] + [replace(good[-1], sequence=99)],
-            good[:2] + [replace(good[2], packet_size=24)] + good[3:]]
+        cases = [good[:-1], good[:-1] + [replace(good[-1], qpc=851)],
+            good[:-1] + [replace(good[-1], sequence=99)]]
         for tail in cases:
             s = self.session()
             s.update(metadata(1130, tail), events([(1, 200, packet(value=100))]), 1000)
@@ -173,15 +171,12 @@ class QuestSuccessTests(unittest.TestCase):
             s.update(metadata(quest, tail), events([(1, 200, packet(value=100))]), 1000)
             self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
 
-    def test_rejects_incomplete_wrong_size_gaps_order_time_and_wrong_objects(self):
+    def test_rejects_incomplete_gapped_delayed_and_wrong_objects(self):
         for quest in (1130, 1132, 1005, 1006):
             good = success(quest)
-            cases = [good[:-1], good[:1]+good[2:],
-                     good[:-1]+[replace(good[-1], packet_size=good[-1].packet_size+4)],
+            cases = [good[:-1], good[1:],
                      good[:-1]+[replace(good[-1], sequence=99)],
-                     good[:-1]+[replace(good[-1], qpc=851)],
-                     good[:1]+[good[2],good[1]]+good[3:],
-                     good[:1]+[notice(5, 801, 4, 6, 32)]+good[1:]]
+                     good[:-1]+[replace(good[-1], qpc=851)]]
             if quest != 1130:
                 wrong = bytearray(good[1].prefix)
                 struct.pack_into('<H', wrong, 16, 4)  # Object must still have type 6.
@@ -190,15 +185,39 @@ class QuestSuccessTests(unittest.TestCase):
                 cases.append(good[:1]+[replace(good[1],prefix=bytes(empty))]+good[2:])
                 cases.append(good[:1]+[replace(good[1],prefix=good[1].prefix[:8])]+good[2:])
             if quest in (1005, 1006):
-                # The 0b:fc size is per step; everything else stays exact.
-                cases += [good[:5]+good[6:], good[:9]+good[10:],
-                          good[:5]+[replace(good[5], packet_size=52)]+good[6:],
-                          good[:9]+[replace(good[9], packet_size=28)]+good[10:]]
+                # Without 0b:ff the 0b:fc result is an intermediate Divide stage.
+                cases.append(good[:5]+good[6:])
             for tail in cases:
                 with self.subTest(quest=quest, sequences=[e.sequence for e in tail]):
                     s = self.session()
                     s.update(metadata(quest, tail), events([(1, 200, packet(value=100))]), 1000)
                     self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
+
+    def test_any_burst_from_0b26_to_0b11_clears_regardless_of_what_lies_between(self):
+        middles = [[], [(11, 0x13, 52)], [(4, 6, 32), (11, 0xee, 16)]]
+        for middle in middles:
+            with self.subTest(middle=middle):
+                tail = [notice(4, 800, 11, 0x26, 24)]
+                tail += [notice(5 + i, 801 + i, major, minor, size) for i, (major, minor, size) in enumerate(middle)]
+                tail.append(notice(tail[-1].sequence + 1, 805, 11, 0x11, 60))
+                s = self.session()
+                s.update(metadata(475, tail), events([(1, 200, packet(value=100))]), 1000)
+                q = s.view()['current']['quest_measurement']
+                self.assertEqual((q['end_reason'], q['end_qpc']), ('clear_candidate', 805))
+                self.assertEqual(q['unmatched_clear_notices'], [])
+
+    def test_unmatched_bursts_are_reported_on_the_interval(self):
+        divide = success(1005)
+        stage = divide[:5] + [replace(e, sequence=e.sequence - 1) for e in divide[6:]]
+        broken = [notice(40, 900, 11, 0x26, 24), notice(41, 901, 11, 0x2e, 544), notice(43, 902, 11, 0x11, 24)]
+        s = self.session()
+        s.update(metadata(1005, stage + broken), events([(1, 200, packet(value=100))]), 1000)
+        q = s.view()['current']['quest_measurement']
+        self.assertIsNone(q['end_qpc'])
+        self.assertEqual([u['reason'] for u in q['unmatched_clear_notices']],
+                         ['divide_intermediate_stage', 'incomplete'])
+        self.assertTrue(q['unmatched_clear_notices'][0]['shape'].startswith('0b:26/24 08:0b/192'))
+        self.assertEqual(q['unmatched_clear_notices'][1]['shape'], '0b:26/24 0b:2e/544')
 
     def test_divide_final_any_fc_size_ends_time_at_the_defeating_blow(self):
         for size in (11332, 11600, 11680, 11604):

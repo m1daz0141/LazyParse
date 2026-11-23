@@ -18,7 +18,9 @@ SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b8612
 SUPPORTED_CLASSICS = frozenset({SUPPORTED_CLASSIC,
     'b434e9e245a1ba02a71fefb360c5a25b6063b616a474da4ba0fca4867ad7f3e3',
     'dd25110b8c1e7e788a4df5d329567bedd21cefcf5e87379ba0076ae055464f03'})
-RULE_VERSION = 14
+RULE_VERSION = 15
+# Closed without a recognized clear notice: time ends at the last player hit.
+LAST_HIT_END_REASONS = frozenset({'left_quest_without_clear', 'clear_by_result'})
 TIMED_GAP_FLAGS = {'binding_gap', 'identity_context_binding_reset'}
 # This adjacent pair was observed only for 1132. Other observed return layouts
 # have their own scoped rules; incapacitation alone is not a universal end.
@@ -27,45 +29,25 @@ EXTREME_QUESTS = frozenset({1025, 1027})
 STORY_DUEL = 939
 # Team room (503) and my room (505) load like quests but are not quests.
 NON_QUEST_IDS = frozenset({503, 505})
-# Match complete observed success layouts independently of the quest ID/name
-# catalog. Intermediate stage notifications have different layouts; neither
-# 0b:26 nor 0b:11 alone authorizes closing a measurement.
-CLEAR_PATTERNS = (
-    (((0xb, 0x26), 24), ((0xb, 0x11), 48)),
-    (((0xb, 0x26), 24), ((0xb, 0x11), 24)),
-    # Black Territory / Floating Facility: complete adjacent success pair.
-    (((0xb, 0x26), 24), ((0xb, 0x11), 36)),
-    (((0xb, 0x26), 24), ((0xb, 0x4e), 12), ((0xb, 0x44), 32), ((0xb, 0x11), 72)),
-    # Forest and Dragons: no 0b:44 between the final result notifications.
-    (((0xb, 0x26), 24), ((0xb, 0x4e), 12), ((0xb, 0x11), 72)),
-    (((0xb, 0x26), 24), ((0xb, 0xed), 24), ((0xb, 0xf0), 32), ((0xb, 0x11), 24)),
-    # Masquerade success also has a 20-byte f0 body without an object spawn.
-    # Retain the entire adjacent result sequence, not an arbitrary f0 size.
-    (((0xb, 0x26), 24), ((0xb, 0xed), 24), ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
-    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xed), 24),
-           ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
-    # Boss defeat (1137 / 1253 / 467): the result object spawns between the
-    # pair at the defeating blow; 0b:11 sizes as observed per quest.
-    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0x11), 24)),
-    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0x11), 36)),
-    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0x11), 84)),
-)
-# Divide final stage (Step 5/25/30 observed: 0b:fc 11332/11680/11600 bytes).
-# The 0b:fc body size differs per step, so only that size is a wildcard; the
-# complete adjacent sequence (with 0b:ff/0b:cc and the ob_3200_0041 spawn) is
-# still required. Intermediate stages send 0b:fc without this final sequence.
-DIVIDE_FINAL = (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xf1), 20),
-    ((0xb, 0xcf), 32), ((0xb, 0xfe), 44), ((0xb, 0xff), 48),
-    ((0xb, 0xfc), None), ((0xb, 0xf1), 20), ((0xb, 0xf1), 20),
-    ((0xb, 0xcc), 24), ((0xb, 0x11), 36))
+# Success notice burst, independent of the quest ID/name catalog: 0b:26 (24
+# bytes), then any notices, then 0b:11, all with consecutive sequence numbers
+# within 50 ms. Every 0b:26 burst in the recordings so far has this form; what
+# lies between differs per quest (nothing, an object spawn, 0b:ed/0b:f0, the
+# Divide result). Neither 0b:26 nor 0b:11 alone authorizes closing.
+CLEAR_START = ((0xb, 0x26), 24)
+CLEAR_END = (0xb, 0x11)
+CLEAR_MAX_EVENTS = 16
+# Divide: every stage sends 0b:fc; only the final stage also sends 0b:ff.
+DIVIDE_RESULT = (0xb, 0xfc)
+DIVIDE_FINAL_MARK = (0xb, 0xff)
 # The Divide final result arrives after a ~16 s defeat cut-scene and a map
 # transfer; its time ends at the last player hit (the defeating blow) instead.
 DIVIDE_KILL_WINDOW_SECONDS = 60
+UNMATCHED_LIMIT = 8
 
 
-def _shape_matches(shapes, pattern):
-    return len(shapes) <= len(pattern) and all(
-        shape[0] == expected[0] and expected[1] in (None, shape[1]) for shape, expected in zip(shapes, pattern))
+def notice_shape(events):
+    return ' '.join(f'{e.packet_id[0]:02x}:{e.packet_id[1]:02x}/{e.packet_size}' for e in events)
 
 
 def player_hits(report):
@@ -74,44 +56,56 @@ def player_hits(report):
 
 
 class ClearNotice:
-    """Complete observed success layouts, shared across quest IDs."""
+    """Generic success burst; a 0b:26 burst that does not qualify is reported in `unmatched`."""
     def __init__(self, frequency):
         self.frequency = frequency
         self.divide_final = False
+        self.unmatched = None
         self.reset()
 
     def reset(self):
         self.events = []
 
+    def _reject(self, reason):
+        if self.events:
+            first = self.events[0]
+            self.unmatched = {'sequence': first.sequence, 'qpc': first.qpc,
+                              'shape': notice_shape(self.events), 'reason': reason}
+        self.reset()
+
     def feed(self, event):
         self.divide_final = False  # Set with a returned match of the Divide final layout.
+        self.unmatched = None      # Set when a started burst ends without a clear.
         shape = (event.packet_id, event.packet_size)
-        if shape == ((0xb, 0x26), 24):
+        if self.events and (event.sequence != self.events[-1].sequence + 1 or
+                            not 0 <= event.qpc - self.events[0].qpc <= self.frequency // 20):
+            self._reject('incomplete')
+        if shape == CLEAR_START:
+            if self.events:
+                self._reject('restarted')
             self.events = [event]
             return None
         if not self.events:
-            return None
-        if (event.sequence != self.events[-1].sequence + 1 or
-                not 0 <= event.qpc - self.events[0].qpc <= self.frequency // 20):
-            self.reset()
             return None
         if shape == ((8, 0xb), 192):
             name, _, status = spawn_name(event)
             if (len(event.prefix) < 20 or ObjectRef.from_packet(event.prefix, 8).entity_type != 6
                     or status != 'complete' or not name):
-                self.reset()
+                self.events.append(event)
+                self._reject('unexpected_spawn')
                 return None
         self.events.append(event)
-        shapes = tuple((e.packet_id, e.packet_size) for e in self.events)
-        divide = len(shapes) == len(DIVIDE_FINAL) and _shape_matches(shapes, DIVIDE_FINAL)
-        if shapes in CLEAR_PATTERNS or divide:
-            self.divide_final = divide
+        if event.packet_id == CLEAR_END:
+            ids = {e.packet_id for e in self.events}
+            if DIVIDE_RESULT in ids and DIVIDE_FINAL_MARK not in ids:
+                self._reject('divide_intermediate_stage')
+                return None
+            self.divide_final = DIVIDE_RESULT in ids
             sequences = [e.sequence for e in self.events]
             self.reset()
             return sequences
-        if not (any(shapes == pattern[:len(shapes)] for pattern in CLEAR_PATTERNS)
-                or _shape_matches(shapes, DIVIDE_FINAL)):
-            self.reset()
+        if len(self.events) > CLEAR_MAX_EVENTS:
+            self._reject('too_long')
         return None
 
 
@@ -182,6 +176,7 @@ class QuestBucket:
         self.campship_return_sequences = None
         self.divide_final = False
         self.last_player_hit_qpc = None
+        self.unmatched_clear_notices = []
         self.local_flags = set()
         self.engine = CombatEngine(owner.idle_seconds)
         # The parent stream validates global sequence continuity; a logical
@@ -203,10 +198,19 @@ class QuestBucket:
             self.last_player_hit_qpc = max(event.qpc, self.last_player_hit_qpc or event.qpc)
 
     def time_end(self):
-        """Divide final: the defeating blow, not the result after the cut-scene."""
-        if (self.divide_final and self.end is not None and self.last_player_hit_qpc is not None
-                and 0 <= self.end - self.last_player_hit_qpc <= DIVIDE_KILL_WINDOW_SECONDS * self.owner.frequency):
-            return self.last_player_hit_qpc, 'last_player_hit_before_divide_final_clear'
+        """Divide final: the defeating blow, not the result after the cut-scene.
+
+        A quest left without a recognized clear notice ends its time at the
+        last player hit, so walking out does not dilute the DPS.
+        """
+        if self.end is None or self.last_player_hit_qpc is None or self.last_player_hit_qpc > self.end:
+            return None, None
+        if self.divide_final:
+            if self.end - self.last_player_hit_qpc <= DIVIDE_KILL_WINDOW_SECONDS * self.owner.frequency:
+                return self.last_player_hit_qpc, 'last_player_hit_before_divide_final_clear'
+            return None, None
+        if self.kind == 'quest' and self.reason in LAST_HIT_END_REASONS:
+            return self.last_player_hit_qpc, 'last_player_hit_without_clear_notice'
         return None, None
 
     def report(self):
@@ -247,6 +251,7 @@ class QuestBucket:
             'failure_notice_sequence': self.failure_notice_sequence,
             'failure_return_pair_sequences': self.failure_return_pair_sequences,
             'campship_return_sequences': self.campship_return_sequences,
+            'unmatched_clear_notices': self.unmatched_clear_notices,
             'stream_finalized': self.owner.finalized, 'capture_id': self.owner.capture_id}
         result['quality']['flags'] = sorted(set(result['quality']['flags']) | self.owner.flags | self.local_flags)
         result['quality']['per_capture'][self.owner.capture_id] = sorted(
@@ -357,6 +362,10 @@ class QuestSession:
                 self._new(event.qpc, 'outside_quest').start_sequence = event.sequence
             return
         clear_sequences = self.clear_notice.feed(event)
+        unmatched = self.clear_notice.unmatched
+        if unmatched and len(self.active.unmatched_clear_notices) < UNMATCHED_LIMIT:
+            # Kept for finding success layouts this rule does not yet cover.
+            self.active.unmatched_clear_notices.append(unmatched)
         if clear_sequences and self.active.kind == 'quest':
             world, quest = self.active.world, self.active.quest
             self.active.clear_notice_sequences = clear_sequences
@@ -394,6 +403,13 @@ class QuestSession:
                 self.last_quest.result_qpc = event.qpc
                 self.last_quest.result_sequence = event.sequence
                 self.last_quest.reason = 'clear_candidate_with_result'
+            elif (self.last_quest.reason == 'left_quest_without_clear' and self.active.kind == 'outside_quest'
+                    and self.active.start == self.last_quest.end):
+                # Quest results arrive on the campship only after a completed
+                # quest: a clear whose notice this rule did not recognize.
+                self.last_quest.result_qpc = event.qpc
+                self.last_quest.result_sequence = event.sequence
+                self.last_quest.reason = 'clear_by_result'
             # No matching clear pair: keep timing open instead of inventing
             # an exact clear instant from a delayed return-to-campship result.
 

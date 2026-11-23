@@ -61,6 +61,35 @@ def fixture():
     return identities, damage
 
 
+class NoClearNoticeTests(unittest.TestCase):
+    def run_quest(self, tail):
+        identities = fixture()[0][:2] + [level(3, 100, 17), level(4, 900, 0, 504)] + tail
+        s = QuestSession('fixture', 20, 1000, SUPPORTED_CLASSIC)
+        s.update(identities, events([(1, 200, packet(value=100)), (2, 300, packet(value=50))]), 2000)
+        return next(r for r in s.reports() if r['quest_measurement']['kind'] == 'quest')
+
+    def test_leaving_without_clear_ends_time_at_the_last_player_hit(self):
+        report = self.run_quest([])
+        q = report['quest_measurement']
+        self.assertEqual((q['end_reason'], q['end_qpc'], q['time_end_qpc']), ('left_quest_without_clear', 900, 300))
+        self.assertEqual(q['time_end_evidence'], 'last_player_hit_without_clear_notice')
+        self.assertAlmostEqual(report['timing']['elapsed_seconds'], 0.1)
+
+    def test_quest_results_after_leaving_confirm_the_clear(self):
+        report = self.run_quest([notice(5, 950, 0xb, 0x14, 1856)])
+        q = report['quest_measurement']
+        self.assertEqual((q['end_reason'], q['result_qpc'], q['time_end_qpc']), ('clear_by_result', 950, 300))
+        self.assertAlmostEqual(report['timing']['elapsed_seconds'], 0.1)
+
+    def test_results_after_another_quest_started_do_not_relabel(self):
+        identities = fixture()[0][:2] + [level(3, 100, 17), level(4, 900, 0, 504), level(5, 920, 18),
+                                         notice(6, 950, 0xb, 0x14, 1856)]
+        s = QuestSession('fixture', 20, 1000, SUPPORTED_CLASSIC)
+        s.update(identities, events([(1, 200, packet(value=100))]), 2000)
+        first = s.buckets[1]
+        self.assertEqual((first.quest, first.reason), (475, 'left_quest_without_clear'))
+
+
 class NonQuestRoomTests(unittest.TestCase):
     def test_team_room_and_my_room_are_outside_quests(self):
         for room in (503, 505):
@@ -274,10 +303,9 @@ class QuestTests(unittest.TestCase):
         late.update(identities, [], 2100)
         self.assertIsNone(late.view()['current'])
 
-    def test_clear_pair_requires_size_sequence_and_time_and_duplicate_world_cannot_restart(self):
+    def test_clear_pair_requires_sequence_and_time_and_duplicate_world_cannot_restart(self):
         identities, damage = fixture()
-        for bad in (notice(7, 1000, 0xb, 0x11, 52), notice(17, 1000, 0xb, 0x11, 48),
-                    notice(7, 1500, 0xb, 0x11, 48)):
+        for bad in (notice(17, 1000, 0xb, 0x11, 48), notice(7, 1500, 0xb, 0x11, 48)):
             sequence = identities[:6] + [bad]
             session = self.session()
             session.update(sequence, damage[:3], 1800)

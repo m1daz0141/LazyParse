@@ -44,17 +44,14 @@ class ShortSuccessTests(unittest.TestCase):
                 self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
                 self.assertEqual(s.view()['current']['counts']['records'], 0)
 
-    def test_partial_gapped_reordered_delayed_or_different_sizes_do_not_clear(self):
+    def test_partial_gapped_reordered_or_delayed_do_not_clear(self):
         for extreme in (False, True):
             good = short_success(extreme)
             cases = [good[:-1], good[1:],
                 good[:-1] + [replace(good[-1], sequence=99)],
                 good[:-1] + [replace(good[-1], qpc=851)],
                 good[:-1] + [replace(good[-1], qpc=799)],
-                good[:-1] + [replace(good[-1], packet_size=68)],
-                [good[-1]] + good[:-1],
-                good[:1] + [notice(5, 801, 11, 0x13, 52)] +
-                    [replace(e, sequence=e.sequence+1) for e in good[1:]]]
+                [good[-1]] + good[:-1]]
             for tail in cases:
                 with self.subTest(extreme=extreme, tail=tail):
                     s = QuestSession('fixture', 20, 1000, SUPPORTED_CLASSIC)

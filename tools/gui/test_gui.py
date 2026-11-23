@@ -214,6 +214,16 @@ class WindowTests(unittest.TestCase):
                 self.assertEqual(app.rows[0]['damage_dealt'], 92341)
                 self.assertIn('92,341', app.summary.cget('text'))
                 self.assertLess(app.summary.winfo_rooty(), root.winfo_rooty() + root.winfo_height())
+                app.snapshot = {**app.saved, 'quest_view': {'outside_player_hits': 75},
+                                'measurement': {**app.saved['measurement'], 'quest_id': 'fixture#quest-1'}}
+                app.render()
+                self.assertNotIn('別枠', app.summary.cget('text'))  # Hidden unless enabled.
+                app.toggle('show_outside_hits')
+                self.assertIn('別枠 75件', app.summary.cget('text'))
+                app.toggle('show_outside_hits')
+                self.assertNotIn('別枠', app.summary.cget('text'))
+                app.snapshot = app.saved
+                app.render()
                 self.assertEqual(str(app.start_button.cget('state')), 'disabled')
                 app.command('Start')
                 self.assertEqual(backend.requests, [])
@@ -271,9 +281,12 @@ class SettingsTests(unittest.TestCase):
     def test_preferences_survive_restart_and_invalid_values_are_ignored(self):
         with tempfile.TemporaryDirectory() as work:
             path = Path(work) / 'preferences.json'
-            settings = Settings(opacity=.75, only_me=True, geometry='710x290+20+30', dps_mode='damage', time_decimals=False)
+            self.assertFalse(Settings().show_outside_hits)
+            settings = Settings(opacity=.75, only_me=True, geometry='710x290+20+30', dps_mode='damage', time_decimals=False,
+                                show_outside_hits=True)
             settings.save(path)
             loaded = Settings.load(path)
+            self.assertTrue(loaded.show_outside_hits)
             self.assertEqual((loaded.opacity, loaded.only_me, loaded.geometry), (.75, True, '710x290+20+30'))
             self.assertEqual((loaded.dps_mode, loaded.time_decimals), ('damage', False))
             path.write_text(json.dumps({'schema_version': 1, 'opacity': -1, 'font_size': 90,

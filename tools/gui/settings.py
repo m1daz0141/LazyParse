@@ -25,6 +25,8 @@ class Settings:
     dps_mode: str = 'quest'
     time_decimals: bool = False
     auto_text_export: bool = True
+    # Footer count of player hits outside quests (e.g. after a timed clear).
+    show_outside_hits: bool = False
     game_directory: str = ''
     theme_background: str = DEFAULT_BACKGROUND
     theme_accent: str = DEFAULT_ACCENT
@@ -42,7 +44,8 @@ class Settings:
             values = json.loads(path.read_text(encoding='utf-8'))
             if values.get('schema_version') != 1:
                 return result
-            for name in ('topmost', 'players_only', 'only_me', 'anonymize', 'bars', 'highlight_self', 'auto_quests', 'time_decimals', 'auto_text_export'):
+            for name in ('topmost', 'players_only', 'only_me', 'anonymize', 'bars', 'highlight_self', 'auto_quests', 'time_decimals', 'auto_text_export',
+                         'show_outside_hits'):
                 if type(values.get(name)) is bool:
                     setattr(result, name, values[name])
             if values.get('dps_mode') in DPS_MODES:

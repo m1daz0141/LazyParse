@@ -344,6 +344,7 @@ class Application:
         self._check(parsing, 'プレイヤーのみ表示', 'players_only')
         self._check(parsing, '自分のみ表示', 'only_me')
         self._check(parsing, '人物名を匿名表示', 'anonymize')
+        self._check(parsing, 'クエスト外の与ダメ件数（別枠）を表示', 'show_outside_hits')
         parsing.add_separator()
         parsing.add_command(label='取得状態・品質を確認', command=self.show_diagnostics)
         parsing.add_separator()
@@ -826,7 +827,7 @@ class Application:
         if self.report.get('quest_measurement', {}).get('kind') == 'quest' and not self.notice:
             text += '    ' + quest_label(self.report)
         outside = (snapshot.get('quest_view') or {}).get('outside_player_hits', 0)
-        if outside and measurement.get('quest_id') and not self.notice:
+        if outside and self.settings.show_outside_hits and measurement.get('quest_id') and not self.notice:
             text += f'    別枠 {outside}件'
         self.summary.configure(text=text)
         for key, detail in list(self.details.items()):

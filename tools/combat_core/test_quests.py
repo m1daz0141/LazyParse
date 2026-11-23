@@ -61,6 +61,21 @@ def fixture():
     return identities, damage
 
 
+class NonQuestRoomTests(unittest.TestCase):
+    def test_team_room_and_my_room_are_outside_quests(self):
+        for room in (503, 505):
+            with self.subTest(room=room):
+                identities = fixture()[0][:2] + [level(3, 100, 17), level(4, 500, 30, room),
+                                                 level(5, 900, 31, 475)]
+                s = QuestSession('fixture', 20, 1000, SUPPORTED_CLASSIC)
+                s.update(identities, events([(1, 200, packet(value=100)), (2, 600, packet(value=5))]), 1000)
+                kinds = [(b.kind, b.quest) for b in s.buckets]
+                self.assertEqual(kinds, [('outside_quest', None), ('quest', 475), ('outside_quest', None), ('quest', 475)])
+                self.assertEqual(s.buckets[1].reason, 'left_quest_without_clear')
+                quests = [r for r in s.view()['history'] if r['quest_measurement']['kind'] == 'quest']
+                self.assertTrue(all(r['quest_measurement']['quest_candidate'] != room for r in quests))
+
+
 class BindingResetTests(unittest.TestCase):
     def test_reset_before_the_measured_start_is_not_a_gap(self):
         timeline, engine = MetadataTimeline(), CombatEngine()

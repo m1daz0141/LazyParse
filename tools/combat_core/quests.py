@@ -18,13 +18,15 @@ SUPPORTED_CLASSIC = 'b2a87ec9000caa7667677d22f51859c449f4bb686f10b876370be7b8612
 SUPPORTED_CLASSICS = frozenset({SUPPORTED_CLASSIC,
     'b434e9e245a1ba02a71fefb360c5a25b6063b616a474da4ba0fca4867ad7f3e3',
     'dd25110b8c1e7e788a4df5d329567bedd21cefcf5e87379ba0076ae055464f03'})
-RULE_VERSION = 13
+RULE_VERSION = 14
 TIMED_GAP_FLAGS = {'binding_gap', 'identity_context_binding_reset'}
 # This adjacent pair was observed only for 1132. Other observed return layouts
 # have their own scoped rules; incapacitation alone is not a universal end.
 FAILURE_RETURN_QUESTS = frozenset({1132})
 EXTREME_QUESTS = frozenset({1025, 1027})
 STORY_DUEL = 939
+# Team room (503) and my room (505) load like quests but are not quests.
+NON_QUEST_IDS = frozenset({503, 505})
 # Match complete observed success layouts independently of the quest ID/name
 # catalog. Intermediate stage notifications have different layouts; neither
 # 0b:26 nor 0b:11 alone authorizes closing a measurement.
@@ -42,6 +44,11 @@ CLEAR_PATTERNS = (
     (((0xb, 0x26), 24), ((0xb, 0xed), 24), ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
     (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0xed), 24),
            ((0xb, 0xf0), 20), ((0xb, 0x11), 24)),
+    # Boss defeat (1137 / 1253 / 467): the result object spawns between the
+    # pair at the defeating blow; 0b:11 sizes as observed per quest.
+    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0x11), 24)),
+    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0x11), 36)),
+    (((0xb, 0x26), 24), ((8, 0xb), 192), ((0xb, 0x11), 84)),
 )
 # Divide final stage (Step 5/25/30 observed: 0b:fc 11332/11680/11600 bytes).
 # The 0b:fc body size differs per step, so only that size is a wildcard; the
@@ -290,6 +297,8 @@ class QuestSession:
         world, quest = fields[1]['object_id'], fields[2]['object_id']
         if bool(world) != bool(fields[0]['object_id']):
             return None  # Mixed zero/nonzero world and map: unknown layout/state.
+        if quest in NON_QUEST_IDS:
+            return 0, quest  # Measured like the lobby: outside any quest.
         return (world, quest) if quest else None
 
     def _new(self, qpc, kind, world=None, quest=None, partial=False):

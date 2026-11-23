@@ -20,6 +20,10 @@ def success(quest, sequence=4, qpc=800):
                (11, 0xcc, 24), (11, 0x11, 36)],
         1023: [(11, 0x26, 24), (11, 0x4e, 12), (11, 0x44, 32), (11, 0x11, 72)],
         1024: [(11, 0x26, 24), (11, 0x4e, 12), (11, 0x44, 32), (11, 0x11, 72)],
+        # Boss defeat: observed at the defeating blow.
+        1137: [(11, 0x26, 24), (8, 0xb, 192), (11, 0x11, 24)],
+        1253: [(11, 0x26, 24), (8, 0xb, 192), (11, 0x11, 36)],
+        467: [(11, 0x26, 24), (8, 0xb, 192), (11, 0x11, 84)],
     }
     if quest == 1006:
         shapes[1006] = [(major, minor, 11600 if (major, minor) == (11, 0xfc) else size)
@@ -31,7 +35,8 @@ def success(quest, sequence=4, qpc=800):
             data = bytearray(192)
             struct.pack_into('<I4B', data, 0, size, 0, major, minor, 0)
             struct.pack_into('<IIHH', data, 8, 73, 0, 6, 17)
-            name = b'ob_3250_0023' if quest == 1132 else b'ob_3200_0041'
+            name = {1132: b'ob_3250_0023', 1253: b'ob_3250_0023', 1137: b'ob_2100_0011',
+                    467: b'ob_2100_0011'}.get(quest, b'ob_3200_0041')
             data[0x24:0x24 + len(name)] = name
             event = replace(event, prefix=bytes(data))
         result.append(event)
@@ -90,7 +95,7 @@ class QuestSuccessTests(unittest.TestCase):
             self.assertIsNone(s.view()['current']['quest_measurement']['end_qpc'])
 
     def test_success_precedes_return_and_return_failure_pairs_cannot_close_twice(self):
-        for quest in (1130, 1132, 1005, 1006, 1023, 1024):
+        for quest in (1130, 1132, 1005, 1006, 1023, 1024, 1137, 1253, 467):
             with self.subTest(quest=quest):
                 tail = success(quest)
                 seq = tail[-1].sequence
@@ -121,7 +126,7 @@ class QuestSuccessTests(unittest.TestCase):
                 self.assertEqual(len([r for r in s.view()['history'] if r['quest_measurement']['kind']=='quest']), 1)
 
     def test_complete_success_layouts_work_without_registered_quest_or_object_names(self):
-        for pattern_quest in (1130, 1132, 1005, 1006, 1023, 1024):
+        for pattern_quest in (1130, 1132, 1005, 1006, 1023, 1024, 1137, 1253, 467):
             for other in (475, 992, 970, 980, 988, 1047):
                 with self.subTest(pattern=pattern_quest, other=other):
                     s = self.session()

@@ -8,7 +8,8 @@ import tkinter as tk
 from tkinter import filedialog, font, ttk, messagebox, colorchooser
 
 from .settings import Settings, STATE
-from .viewmodel import COLUMNS, number, percentage, actor_rows, attack_rows, source_rows, clipboard_summary, status_view, rate_tooltip, display_elapsed, elapsed_label
+from .privacy import full_access, is_restricted
+from .viewmodel import COLUMNS, number, party_total, percentage, actor_rows, attack_rows, source_rows, clipboard_summary, status_view, rate_tooltip, display_elapsed, elapsed_label
 from .timing import with_dps_mode, DPS_MODES
 from ..attack_catalog.catalog import attack_label, get_catalog, with_attack_names, EDITABLE_CSV
 from ..combat_core.quest_catalog import QUESTS_CSV, get_quest_catalog, quest_label
@@ -342,7 +343,8 @@ class Application:
                                    command=lambda mode=mode: self.set_dps_mode(mode))
         parsing.add_separator()
         self._check(parsing, 'プレイヤーのみ表示', 'players_only')
-        self._check(parsing, '自分のみ表示', 'only_me')
+        if full_access():
+            self._check(parsing, '自分のみ表示', 'only_me')
         self._check(parsing, '人物名を匿名表示', 'anonymize')
         self._check(parsing, 'クエスト外の与ダメ件数（別枠）を表示', 'show_outside_hits')
         parsing.add_separator()
@@ -821,7 +823,8 @@ class Application:
         total = sum(row['damage_dealt'] for row in self.rows)
         dps = total / elapsed if elapsed else None
         flags = self.report.get('quality', {}).get('flags', [])
-        text = self.notice or f"Time {elapsed_label(elapsed, self.settings.time_decimals)} s    Total {number(total)}    DPS {number(dps, 1)}    Hits {sum(row['hits_dealt'] for row in self.rows)}"
+        whole = f"    全体 {number(party_total(self.report, self.settings.players_only))}" if is_restricted(self.report) else ''
+        text = self.notice or f"Time {elapsed_label(elapsed, self.settings.time_decimals)} s    Total {number(total)}{whole}    DPS {number(dps, 1)}    Hits {sum(row['hits_dealt'] for row in self.rows)}"
         if flags and not self.notice:
             text += f'    ⚠ {len(flags)}'
         if self.report.get('quest_measurement', {}).get('kind') == 'quest' and not self.notice:

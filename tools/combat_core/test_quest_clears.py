@@ -303,6 +303,7 @@ class MasqueradeRecordingTests(unittest.TestCase):
         from .reader import CaptureDecoder
         from .live import RunJournal, SegmentFollower
         from tools.gui.backend import saved_snapshot
+        from tools.gui.privacy import restrict_snapshot
 
         result = replay_quests(MASQUERADE)
         view = result['quest_view']
@@ -342,7 +343,9 @@ class MasqueradeRecordingTests(unittest.TestCase):
         follower = SegmentFollower(MASQUERADE)
         follower.poll(journal)
         self.assertEqual(follower.quests.view(), view)
-        self.assertEqual(saved_snapshot(MASQUERADE, auto_quests=True)['quest_view'], view)
+        # The GUI reader shows the same view with other players folded together.
+        self.assertEqual(saved_snapshot(MASQUERADE, auto_quests=True)['quest_view'],
+                         restrict_snapshot({'quest_view': view})['quest_view'])
 
 
 @unittest.skipUnless(STEP30.exists(), 'private Step 30 recording required')

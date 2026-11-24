@@ -10,7 +10,8 @@ import uuid
 
 from ..combat_core.quest_catalog import quest_label
 from .timing import with_dps_mode
-from .viewmodel import actor_rows, attack_rows, display_elapsed, number, percentage
+from .viewmodel import actor_rows, attack_rows, display_elapsed, number, party_total, percentage
+from .privacy import is_restricted
 from ..paths import LOGS
 
 EXPORT_DIRECTORY = LOGS
@@ -52,9 +53,11 @@ def render_text(report, *, dps_mode='quest', anonymize=False, time_decimals=True
         duration = f'{int(elapsed) // 60:02d}:{int(elapsed) % 60:02d}'
     date = measurement_date(report)
     date_text = date.astimezone(JST).strftime('%Y年%m月%d日 %H:%M:%S JST') if date else '計測日時不明'
-    total = sum(row['damage_dealt'] for row in rows)
+    restricted = is_restricted(report)
+    total = party_total(report) if restricted else sum(row['damage_dealt'] for row in rows)
+    spread = None if restricted or not rows else pstdev(row['damage_dealt'] for row in rows)
     lines = [f'{date_text} | {duration} | TotalDamage : {total:,} | TotalDPS : {number(total / elapsed if elapsed else None, 1)}'
-             f" | 標準偏差 : {number(pstdev(row['damage_dealt'] for row in rows) if rows else None, 2)}",
+             f" | 標準偏差 : {number(spread, 2)}",
              f"Quest : {quest_label(report)} | DPS方式 : {'クエスト中' if dps_mode == 'quest' else 'ダメージ計測'}", '']
     for row in rows:
         lines.append(f"{clean_line(row['name'])} | {row['share']:.2f}% | {row['damage_dealt']:,} dmg | {row['damage_taken']:,} dmgd"

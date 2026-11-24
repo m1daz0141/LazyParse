@@ -72,6 +72,7 @@ class ShortSuccessRecordingTests(unittest.TestCase):
         from .reader import CaptureDecoder
         from .live import RunJournal, SegmentFollower
         from tools.gui.backend import saved_snapshot
+        from tools.gui.privacy import restrict_snapshot
 
         for capture, expected_records, sequences in (
             (EXPLORATIONS, 13071, {3978: [1979, 1980], 4041: [8600, 8601], 4054: [9722, 9723]}),
@@ -116,7 +117,8 @@ class ShortSuccessRecordingTests(unittest.TestCase):
                 follower = SegmentFollower(capture)
                 follower.poll(journal)
                 self.assertEqual(follower.quests.view(), view)
-                self.assertEqual(saved_snapshot(capture, auto_quests=True)['quest_view'], view)
+                self.assertEqual(saved_snapshot(capture, auto_quests=True)['quest_view'],
+                                 restrict_snapshot({'quest_view': view})['quest_view'])
 
 
 if __name__ == '__main__':

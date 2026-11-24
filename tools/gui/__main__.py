@@ -4,6 +4,7 @@ import tkinter as tk
 
 from .app import Application
 from .backend import Backend, DEFAULT_MANIFEST
+from .privacy import configure as configure_privacy
 from .settings import STATE
 from .windows import dpi_awareness, taskbar_entry
 from ..paths import initialize, HISTORY
@@ -17,10 +18,12 @@ def argument_parser():
     source.add_argument('--manifest', type=Path, default=DEFAULT_MANIFEST)
     parser.add_argument('--capture', type=Path, help='open a saved .opcap or exported report')
     parser.add_argument('--settings', type=Path, default=STATE / 'preferences.json')
+    parser.add_argument('--overparse', action='store_true', help=argparse.SUPPRESS)
     return parser
 
 
 def launch(args):
+    configure_privacy(getattr(args, 'overparse', False))
     initialize()
     dpi_awareness()
     root = tk.Tk()

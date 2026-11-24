@@ -16,6 +16,7 @@ from ..attack_catalog.catalog import with_attack_names
 from ..combat_core.quest_catalog import quest_label
 from .text_export import AutoTextExporter, save_text
 from .control import RuntimeController
+from .privacy import restrict_report, restrict_snapshot
 from ..paths import MANIFEST
 from ..portable.deployment import GameVersionMismatch
 
@@ -64,7 +65,7 @@ def saved_snapshot(capture, *, auto_quests=False):
                 not isinstance(report.get('actors'), list) or not isinstance(report.get('timing'), dict) or
                 not isinstance(report.get('counts'), dict)):
             raise ValueError('対応する集計レポートではありません。')
-        report = with_attack_names(report)
+        report = with_attack_names(restrict_report(report))
     else:
         if auto_quests:
             result = replay_quests(capture)
@@ -72,6 +73,9 @@ def saved_snapshot(capture, *, auto_quests=False):
             report = (quest_view or {}).get('current') or result['capture_report']
         else:
             report = replay(capture)
+        report = restrict_report(report)
+        if quest_view:
+            quest_view = restrict_snapshot({'quest_view': quest_view})['quest_view']
     return {'schema_version': 1, 'state': 'saved_log', 'effective_recording': False,
         'worker_verified': False, 'heartbeat_fresh': False, 'runtime': None,
         'measurement': {'capture_path': str(Path(capture).resolve()), 'complete': True, 'report': report,
@@ -105,6 +109,7 @@ class Backend:
     def _auto_archive(self, report):
         if self.log_directory is None:
             return None
+        report = restrict_report(report)
         text = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + '\n'
         digest = hashlib.sha256(text.encode('utf-8')).hexdigest()[:24]
         path = self.log_directory / f'quest-{digest}.json'
@@ -127,7 +132,7 @@ class Backend:
 
     def _poll(self):
         self._watch_game()
-        snapshot = self._poll_view()
+        snapshot = restrict_snapshot(self._poll_view())
         snapshot['game_version_error'] = self.game_version_error
         enabled, mode, anonymize, decimals = self.text_options
         entries = {}
@@ -241,6 +246,7 @@ class Backend:
             raise ValueError('記録の保存完了を確認できません。')
         report = (snapshot['measurement']['report'] if snapshot['measurement'].get('quest_id')
                   else follower.report(full=True))
+        report = restrict_report(report)
         if self.log_directory is None:
             raise ValueError('ログの保存先が設定されていません。')
         self.log_directory.mkdir(parents=True, exist_ok=True)
@@ -287,6 +293,7 @@ class Backend:
                 report = saved_snapshot(requested['export_source'])['measurement']['report']
             if not report:
                 raise ValueError('保存する集計がありません。')
+            report = restrict_report(report)
             _, mode, anonymize, decimals = self.text_options
             exported = save_text(report, path=path, dps_mode=mode, anonymize=anonymize, time_decimals=decimals)
             self.events.put({'type': 'success', 'message': 'TXTを保存しました: ' + str(exported)})

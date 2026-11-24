@@ -4,6 +4,7 @@ from ..attack_catalog.catalog import attack_label, get_catalog
 from ..combat_core.hit_rates import HitRates
 from ..combat_core.damage_policy import dps_damage, included_totals
 from .control import preparation_error
+from .privacy import OTHERS_ROLE, is_restricted
 
 COLUMNS = [('name', 'Name', 112), ('share', '%', 38), ('damage_dealt', 'Damage', 76),
     ('damage_taken', 'Taken', 48), ('dps', 'DPS', 64), ('ja', 'JA %', 40),
@@ -68,8 +69,11 @@ def actor_rows(report, *, players_only=True, only_me=False, anonymize=False, sor
     anonymous = {key: f'Player {number}' for number, key in enumerate(
         (key for key, row in groups.items() if row['kind'] == 'player' and row['role'] != 'self'), 1)}
     for key, row in groups.items():
-        if only_me and row['role'] != 'self':
+        # Other players folded by privacy.restrict_report count toward the
+        # total and shares but are never a row of their own.
+        if row['role'] == OTHERS_ROLE or (only_me and row['role'] != 'self'):
             continue
+        row['party_total'] = total
         row['share'] = row['damage_dealt'] * 100 / total if total else 0
         row['dps'] = row['damage_dealt'] / elapsed if elapsed else None
         current = names.get((row['object_id'], row['entity_type'], row['map_id']))
@@ -89,6 +93,12 @@ def actor_rows(report, *, players_only=True, only_me=False, anonymize=False, sor
         rows.append(row)
     rows.sort(key=lambda row: (row.get(sort) is not None, row.get(sort) or 0, row['name']), reverse=descending)
     return rows
+
+
+def party_total(report, players_only=True):
+    """DPS damage of everyone, including players folded into その他合計."""
+    return sum(dps_damage(actor) for actor in report.get('actors', [])
+               if not players_only or actor['kind'] == 'player')
 
 
 def attack_rows(report, actor):
@@ -135,8 +145,9 @@ def source_rows(report, actor):
 def clipboard_summary(report, rows, *, time_decimals=True):
     elapsed = display_elapsed(report)
     mode = {'quest': 'クエスト中', 'damage': 'ダメージ計測'}.get(report.get('dps_mode'))
+    whole = f' / 全体 {party_total(report):,}' if is_restricted(report) else ''
     lines = [f"Time {elapsed_label(elapsed, time_decimals)}s / Damage {sum(row['damage_dealt'] for row in rows):,}" +
-             (f' / DPS方式 {mode}' if mode else '')]
+             whole + (f' / DPS方式 {mode}' if mode else '')]
     lines.extend(f"{row['name']}  {row['damage_dealt']:,}  ({row['share']:.1f}%)  {number(row['dps'], 1)} DPS"
                  f"  JA {percentage(row['ja'])}  Crit {percentage(row['crit'])}" for row in rows)
     return '\n'.join(lines)

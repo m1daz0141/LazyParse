@@ -820,11 +820,17 @@ class Application:
         elif self.scrollbar.winfo_manager():
             self.scrollbar.pack_forget()
         elapsed = display_elapsed(self.report)
-        total = sum(row['damage_dealt'] for row in self.rows)
+        if is_restricted(self.report):
+            # Only the player's own row is listed; the bar still shows everyone.
+            total = party_total(self.report, self.settings.players_only)
+            hits = sum(actor['hits_dealt'] for actor in self.report.get('actors', [])
+                       if not self.settings.players_only or actor['kind'] == 'player')
+        else:
+            total = sum(row['damage_dealt'] for row in self.rows)
+            hits = sum(row['hits_dealt'] for row in self.rows)
         dps = total / elapsed if elapsed else None
         flags = self.report.get('quality', {}).get('flags', [])
-        whole = f"    全体 {number(party_total(self.report, self.settings.players_only))}" if is_restricted(self.report) else ''
-        text = self.notice or f"Time {elapsed_label(elapsed, self.settings.time_decimals)} s    Total {number(total)}{whole}    DPS {number(dps, 1)}    Hits {sum(row['hits_dealt'] for row in self.rows)}"
+        text = self.notice or f"Time {elapsed_label(elapsed, self.settings.time_decimals)} s    Total {number(total)}    DPS {number(dps, 1)}    Hits {hits}"
         if flags and not self.notice:
             text += f'    ⚠ {len(flags)}'
         if self.report.get('quest_measurement', {}).get('kind') == 'quest' and not self.notice:

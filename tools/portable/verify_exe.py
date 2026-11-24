@@ -137,6 +137,9 @@ def main():
         'custom_rgb_and_background_preserved_after_move': True, 'pillow_license_bundled': True,
         'game_folder_touched': False}
     (output / 'verification.json').write_text(json.dumps(proof, ensure_ascii=False, indent=2), encoding='utf-8')
+    # Keep only the proof; the copied exe and its config would pile up per build.
+    for leftover in (app2, cwd, report):
+        shutil.rmtree(leftover) if leftover.is_dir() else leftover.unlink()
     print(json.dumps({'proof': str(output/'verification.json'), **proof}, ensure_ascii=False))
 
 

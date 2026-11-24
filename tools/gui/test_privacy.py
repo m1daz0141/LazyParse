@@ -77,7 +77,7 @@ class PrivacyTests(unittest.TestCase):
         self.assertEqual([a['attack_id'] for a in attack_rows(restricted, rows[0])], [1])
         text = render_text(restricted)
         self.assertIn('TotalDamage : 900', text)
-        self.assertIn('標準偏差 : —', text)
+        self.assertNotIn('標準偏差', text)
         self.assertNotIn('その他合計', text)
         self.assertIn('全体 900', clipboard_summary(restricted, rows))
 

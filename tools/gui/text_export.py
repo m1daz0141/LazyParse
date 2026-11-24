@@ -55,9 +55,10 @@ def render_text(report, *, dps_mode='quest', anonymize=False, time_decimals=True
     date_text = date.astimezone(JST).strftime('%Y年%m月%d日 %H:%M:%S JST') if date else '計測日時不明'
     restricted = is_restricted(report)
     total = party_total(report) if restricted else sum(row['damage_dealt'] for row in rows)
-    spread = None if restricted or not rows else pstdev(row['damage_dealt'] for row in rows)
+    # With only the player's own row, a spread across players means nothing.
+    spread = '' if restricted else f" | 標準偏差 : {number(pstdev(row['damage_dealt'] for row in rows) if rows else None, 2)}"
     lines = [f'{date_text} | {duration} | TotalDamage : {total:,} | TotalDPS : {number(total / elapsed if elapsed else None, 1)}'
-             f" | 標準偏差 : {number(spread, 2)}",
+             + spread,
              f"Quest : {quest_label(report)} | DPS方式 : {'クエスト中' if dps_mode == 'quest' else 'ダメージ計測'}", '']
     for row in rows:
         lines.append(f"{clean_line(row['name'])} | {row['share']:.2f}% | {row['damage_dealt']:,} dmg | {row['damage_taken']:,} dmgd"
